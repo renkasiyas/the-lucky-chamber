@@ -96,6 +96,9 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   useEffect(() => {
     if (!ws.connected || !address) return
 
+    // Subscribe to room updates on the backend (needed after navigation from queue)
+    ws.send('subscribe_room', { roomId, walletAddress: address })
+
     const unsubRoomUpdate = ws.subscribe('room:update', (payload: { room: Room }) => {
       if (payload.room.id === roomId) {
         setRoom(payload.room)

@@ -184,6 +184,10 @@ export class WSServer {
           this.handlePullTrigger(ws, payload as PullTriggerPayload)
           break
 
+        case 'subscribe_room':
+          this.handleSubscribeRoom(ws, payload as { roomId: string; walletAddress: string })
+          break
+
         default:
           this.sendError(ws, `Unknown event: ${event}`)
       }
@@ -209,6 +213,32 @@ export class WSServer {
 
     // Send room update to all subscribers
     this.broadcastRoomUpdate(roomId)
+  }
+
+  /**
+   * Subscribe to room updates without joining (for reconnection after queue match)
+   */
+  private handleSubscribeRoom(ws: WebSocket, payload: { roomId: string; walletAddress: string }): void {
+    const { roomId, walletAddress } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
+
+    const room = roomManager.getRoom(roomId)
+    if (!room) {
+      this.sendError(ws, 'Room not found')
+      return
+    }
+
+    client.walletAddress = walletAddress
+    client.subscribedRooms.add(roomId)
+
+    // Send current room state to this client
+    this.send(ws, {
+      event: WSEvent.ROOM_UPDATE,
+      payload: { room }
+    })
+
+    logger.debug('Client subscribed to room', { roomId, walletAddress })
   }
 
   private async handleLeaveRoom(ws: WebSocket, payload: LeaveRoomPayload): Promise<void> {

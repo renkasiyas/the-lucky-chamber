@@ -108,7 +108,7 @@ export function Header() {
                       </span>
                       <span className="text-xs text-ash">KAS</span>
                       <button
-                        onClick={refreshBalance}
+                        onClick={() => refreshBalance()}
                         className="text-xs text-ember hover:text-gold transition-colors ml-1"
                         title="Refresh balance"
                         aria-label="Refresh balance"

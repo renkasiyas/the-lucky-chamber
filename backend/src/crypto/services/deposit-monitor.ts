@@ -110,36 +110,40 @@ export class DepositMonitor {
         continue
       }
 
-      // Calculate how many seats can be confirmed based on total deposits
-      // Each seat requires seatPrice KAS
+      // Calculate deposits - each seat requires seatPrice KAS
       const seatPriceSompi = BigInt(Math.floor(room.seatPrice * 100_000_000))
+      const joinedCount = room.seats.filter(s => s.walletAddress).length
       const confirmedCount = room.seats.filter(s => s.confirmed).length
+      const unconfirmedJoinedCount = room.seats.filter(s => s.walletAddress && !s.confirmed).length
       const totalSeatsPayable = Number(totalAmount / seatPriceSompi)
-      const seatsToConfirm = Math.min(totalSeatsPayable, room.seats.length) - confirmedCount
 
       logger.info('Deposit check result', {
         roomId: room.id,
         totalAmountSompi: totalAmount.toString(),
         seatPriceSompi: seatPriceSompi.toString(),
+        joinedCount,
         confirmedCount,
-        totalSeatsPayable,
-        seatsToConfirm
+        unconfirmedJoinedCount,
+        totalSeatsPayable
       })
 
-      // Confirm seats progressively as deposits arrive
-      if (seatsToConfirm > 0) {
-        let confirmed = 0
+      // Only confirm seats when we have EXACTLY as many new deposits as unconfirmed joined players
+      // This prevents confirming players who haven't deposited yet
+      // We wait for all joined players to deposit, then confirm them all at once
+      const newDepositsAvailable = totalSeatsPayable - confirmedCount
+
+      if (unconfirmedJoinedCount > 0 && newDepositsAvailable >= unconfirmedJoinedCount) {
+        // We have enough deposits for all unconfirmed players - confirm them all
         for (const seat of room.seats) {
-          if (!seat.confirmed && confirmed < seatsToConfirm) {
+          if (seat.walletAddress && !seat.confirmed) {
             const txId = `deposit_${room.id}_${seat.index}`
             this.depositConfirmer.confirmDeposit(room.id, seat.index, txId, room.seatPrice)
-            confirmed++
           }
         }
-        logger.info('Deposits confirmed for room', {
+        logger.info('All deposits confirmed for room', {
           roomId: room.id,
-          newlyConfirmed: confirmed,
-          totalConfirmed: confirmedCount + confirmed,
+          newlyConfirmed: unconfirmedJoinedCount,
+          totalConfirmed: confirmedCount + unconfirmedJoinedCount,
           totalSeats: room.seats.length
         })
       }
