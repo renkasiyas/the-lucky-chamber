@@ -1,0 +1,27 @@
+{
+  "quickMatch": {
+    "enabled": true,
+    "seatPrice": 10,
+    "minPlayers": 6,
+    "maxPlayers": 6,
+    "timeoutSeconds": 60
+  },
+  "customRoom": {
+    "enabled": false,
+    "minSeatPrice": 1,
+    "maxSeatPrice": 1000,
+    "minPlayers": 2,
+    "maxPlayers": 6,
+    "timeoutSeconds": 60
+  },
+  "modes": {
+    "REGULAR": {
+      "enabled": true,
+      "description": "Classic 6-player Russian Roulette with 1 bullet"
+    },
+    "EXTREME": {
+      "enabled": false,
+      "description": "High-stakes mode with n-1 bullets (coming soon)"
+    }
+  }
+}

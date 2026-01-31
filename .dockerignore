@@ -1,0 +1,51 @@
+# ABOUTME: Docker ignore file - excludes files from build context
+# ABOUTME: Reduces build context size and prevents sensitive files from being copied
+
+# Dependencies
+node_modules
+*/node_modules
+
+# Build outputs
+dist
+.next
+out
+
+# Development files
+.git
+.gitignore
+*.md
+!README.md
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files (use docker-compose env instead)
+.env
+.env.local
+.env.*.local
+
+# Test files
+coverage
+*.test.ts
+*.spec.ts
+__tests__
+
+# Logs
+*.log
+logs
+
+# Data files (mounted as volumes)
+*.db
+*.sqlite
+data/
+
+# Claude/AI files
+.claude
+.playwright-mcp

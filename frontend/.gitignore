@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build output
+.next/
+out/
+dist/
+
+# Environment files
+.env
+.env.local
+.env.dev
+.env.prod
+.env.*.local
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Coverage
+coverage/

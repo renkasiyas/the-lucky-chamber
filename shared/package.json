@@ -1,0 +1,12 @@
+{
+  "name": "@kaspian-roulette/shared",
+  "version": "1.0.0",
+  "description": "Shared types and constants for Kaspa Russian Roulette",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module"
+}
