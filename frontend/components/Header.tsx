@@ -11,12 +11,12 @@ import { useKNS } from '../hooks/useKNS'
 import { useToast } from './ui/Toast'
 import { Button } from './ui/Button'
 import { formatAddress, formatBalance } from '../lib/format'
+import config from '../lib/config'
 
 export function Header() {
   const router = useRouter()
   const [liveUsers, setLiveUsers] = useState(0)
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:4002'
-  const ws = useWebSocket(wsUrl)
+  const ws = useWebSocket(config.ws.url)
 
   useEffect(() => {
     if (!ws.connected) return

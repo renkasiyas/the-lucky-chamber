@@ -48,6 +48,7 @@ describe('QueueManager', () => {
       minPlayers: 2,
       state: RoomState.LOBBY,
       createdAt: Date.now(),
+      updatedAt: Date.now(),
       expiresAt: Date.now() + 300000,
       depositAddress: 'kaspatest:addr',
       lockHeight: null,
@@ -56,11 +57,12 @@ describe('QueueManager', () => {
       serverSeed: null,
       houseCutPercent: 5,
       payoutTxId: null,
+      currentTurnSeatIndex: null,
       seats: [],
       rounds: [],
     })
     vi.mocked(roomManager.joinRoom).mockReturnValue({
-      seat: { index: 0, walletAddress: '', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      seat: { index: 0, walletAddress: '', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
       depositAddress: 'kaspatest:addr',
     })
   })
@@ -129,7 +131,7 @@ describe('QueueManager', () => {
           throw new Error('Join failed')
         }
         return {
-          seat: { index: 0, walletAddress: wallet, depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          seat: { index: 0, walletAddress: wallet, depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
           depositAddress: 'kaspatest:addr',
         }
       })

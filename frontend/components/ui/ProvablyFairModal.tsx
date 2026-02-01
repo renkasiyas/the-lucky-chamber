@@ -1,5 +1,5 @@
-// ABOUTME: Modal component showing provably fair verification data
-// ABOUTME: Displays server commit, client seeds, block hash, and derived randomness
+// ABOUTME: Modal component showing provably fair verification data with RNG verification
+// ABOUTME: Displays server commit, client seeds, block hash, derived randomness, and verifies commitment
 
 'use client'
 
@@ -8,6 +8,11 @@ import { createPortal } from 'react-dom'
 import { Room, Round } from '../../../shared'
 import { Button } from './Button'
 import { TxLink } from './TxLink'
+
+interface VerificationResult {
+  commitmentValid: boolean
+  computedCommitment: string
+}
 
 interface ProvablyFairModalProps {
   room: Room
@@ -23,6 +28,8 @@ export function ProvablyFairModal({
   explorerBaseUrl = 'https://kaspa.stream',
 }: ProvablyFairModalProps) {
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null)
+  const [verifying, setVerifying] = useState(false)
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -38,6 +45,33 @@ export function ProvablyFairModal({
   }, [isOpen, handleKeyDown])
 
   const [mounted, setMounted] = useState(false)
+
+  const verifyCommitment = useCallback(async () => {
+    if (!room.serverSeed) return
+
+    setVerifying(true)
+    try {
+      const encoder = new TextEncoder()
+      const seedData = encoder.encode(room.serverSeed)
+      const hashBuffer = await crypto.subtle.digest('SHA-256', seedData)
+      const hashArray = Array.from(new Uint8Array(hashBuffer))
+      const computedCommitment = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+
+      const commitmentValid = computedCommitment === room.serverCommit
+      setVerificationResult({ commitmentValid, computedCommitment })
+    } catch (err) {
+      console.error('Verification failed:', err)
+      setVerificationResult(null)
+    } finally {
+      setVerifying(false)
+    }
+  }, [room.serverSeed, room.serverCommit])
+
+  useEffect(() => {
+    if (isOpen && room.serverSeed && !verificationResult) {
+      verifyCommitment()
+    }
+  }, [isOpen, room.serverSeed, verificationResult, verifyCommitment])
 
   useEffect(() => {
     setMounted(true)
@@ -123,6 +157,65 @@ export function ProvablyFairModal({
                   {room.serverSeed}
                 </code>
               </div>
+            </div>
+          )}
+
+          {/* Commitment Verification Status */}
+          {isRevealed && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-display tracking-wide text-chalk">Verification Status</h3>
+              {verifying ? (
+                <div className="flex items-center gap-2 p-3 bg-smoke border border-edge rounded-lg">
+                  <div className="w-4 h-4 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm text-ash">Verifying commitment...</span>
+                </div>
+              ) : verificationResult ? (
+                <div className={`p-3 rounded-lg border ${
+                  verificationResult.commitmentValid
+                    ? 'bg-alive/10 border-alive/30'
+                    : 'bg-blood/10 border-blood/30'
+                }`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    {verificationResult.commitmentValid ? (
+                      <>
+                        <svg className="w-5 h-5 text-alive-light" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-sm font-display text-alive-light">COMMITMENT VERIFIED</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5 text-blood-light" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-sm font-display text-blood-light">VERIFICATION FAILED</span>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-xs text-ash">
+                    {verificationResult.commitmentValid
+                      ? 'SHA256(server_seed) matches the commitment published before the game.'
+                      : 'The computed hash does not match the commitment. This should not happen.'}
+                  </p>
+                  {showAdvanced && (
+                    <div className="mt-2 pt-2 border-t border-edge/50">
+                      <span className="text-xs text-ember">Computed hash:</span>
+                      <code className="block font-mono text-xs text-chalk break-all mt-1">
+                        {verificationResult.computedCommitment}
+                      </code>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 bg-smoke border border-edge rounded-lg">
+                  <button
+                    onClick={verifyCommitment}
+                    className="text-sm text-gold hover:text-gold-light hover:underline"
+                  >
+                    Click to verify commitment
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

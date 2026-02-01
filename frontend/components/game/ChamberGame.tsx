@@ -1,10 +1,10 @@
-// ABOUTME: Interactive Russian Roulette game chamber with trigger pull mechanic
-// ABOUTME: Dramatic tension-building animations and CLICK/BANG reveal sequences
+// ABOUTME: Interactive Russian Roulette chamber - cinematic game experience
+// ABOUTME: Frame-perfect audio-visual synchronization with dramatic tension building
 
 'use client'
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, useAnimation } from 'framer-motion'
 import type { Room } from '../../../shared/index'
 import { useSound } from '../../hooks/useSound'
 
@@ -17,823 +17,949 @@ interface ChamberGameProps {
   onPullTrigger?: () => void
 }
 
-type GamePhase = 'waiting' | 'your_turn' | 'pulling' | 'revealing' | 'result'
+type GamePhase =
+  | 'idle'           // Waiting, not my turn
+  | 'ready'          // My turn, can pull
+  | 'cock'           // Hammer pulling back (2.4s sound)
+  | 'spin'           // Barrel spinning (3.3s sound)
+  | 'dread'          // Heartbeat tension (variable, builds)
+  | 'bang'           // Death result
+  | 'click'          // Survival result
+  | 'reset'          // Preparing next round
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SOUND DURATIONS (from actual files) - These are SACRED, never approximate
+// ═══════════════════════════════════════════════════════════════════════════
+const AUDIO = {
+  cock: 2400,           // Full mechanical cock sound
+  cylinderSpin: 3336,   // Barrel spin with deceleration
+  heartbeat: 3204,      // One full heartbeat cycle
+  emptyClick: 2000,     // Relief click
+  eliminated: 3000,     // Death sound
+  reload: 3370,         // Chamber reload
+} as const
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHOREOGRAPHY - Cinematic timeline synced to audio
+// ═══════════════════════════════════════════════════════════════════════════
+const SCENE = {
+  // ACT 1: THE COCK (0 - 2400ms)
+  // Sound: Mechanical ratcheting as hammer pulls back
+  // Visual: Hammer rises slowly, tension begins
+  cock: {
+    hammerRise: { start: 0, duration: 800 },      // Hammer pulls back
+    hammerHold: { start: 800, duration: 1600 },   // Held in cocked position
+  },
+
+  // ACT 2: THE SPIN (2400 - 5736ms)
+  // Sound: Cylinder whirring, slowing down
+  // Visual: Barrel rotates fast then decelerates
+  spin: {
+    start: 2400,
+    duration: 3336,
+    rotations: 5,           // Full spins
+    // Barrel decelerates naturally with easeOut
+  },
+
+  // ACT 3: THE DREAD (5736 - 9500ms)
+  // Sound: Heartbeat loop, 2-3 beats
+  // Visual: Everything pulses with the heart, vignette closes in
+  dread: {
+    start: 5736,
+    minDuration: 3200,      // At least one full heartbeat
+    maxDuration: 4800,      // Up to 1.5 heartbeats for spectators
+    beatInterval: 800,      // Visual pulse every 800ms (matches heartbeat BPM)
+  },
+
+  // ACT 4: THE MOMENT (variable)
+  // Sound: Either BANG or click
+  // Visual: Flash, result reveal
+  result: {
+    flashDuration: 80,
+    revealDelay: 100,
+    displayTime: 2800,
+  },
+
+  // ACT 5: RESET
+  reset: {
+    delay: 400,
+    // reload sound plays (3.37s)
+  },
+} as const
 
 export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, onPullTrigger }: ChamberGameProps) {
-  const [phase, setPhase] = useState<GamePhase>('waiting')
-  const [spinOffset, setSpinOffset] = useState(0)
-  const [hammerCocked, setHammerCocked] = useState(false)
-  const [result, setResult] = useState<'click' | 'bang' | null>(null)
-  const [showFlash, setShowFlash] = useState(false)
-  const [showSurvivalFlash, setShowSurvivalFlash] = useState(false)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STATE
+  // ═══════════════════════════════════════════════════════════════════════════
+  const [phase, setPhase] = useState<GamePhase>('idle')
   const [countdown, setCountdown] = useState(30)
-  const [justDiedSeatIndex, setJustDiedSeatIndex] = useState<number | null>(null)
-  const [turnCheckTrigger, setTurnCheckTrigger] = useState(0)
-  const initialRoundIndex = room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1
-  const lastProcessedRound = useRef<number>(initialRoundIndex)
-  const { play: playSound, stop: stopSound } = useSound()
+  const [dreadBeat, setDreadBeat] = useState(0)        // Which heartbeat we're on
+  const [resultType, setResultType] = useState<'bang' | 'click' | null>(null)
+  const [showMuzzleFlash, setShowMuzzleFlash] = useState(false)
+  const [showReliefGlow, setShowReliefGlow] = useState(false)
+  const [eliminatedSeat, setEliminatedSeat] = useState<number | null>(null)
 
-  // Determine whose turn it is - SIMPLIFIED LOGIC
-  // Calculate locally based on room state - this is deterministic and always works
-  const aliveSeats = room.seats.filter(s => s.alive).sort((a, b) => a.index - b.index)
-  const currentShooterPosition = aliveSeats.length > 0 ? currentRound % aliveSeats.length : -1
-  const currentShooter = currentShooterPosition >= 0 ? aliveSeats[currentShooterPosition] : null
-  const currentShooterIndex = currentShooter?.index ?? -1
+  // Animation controllers
+  const hammerControls = useAnimation()
+  const barrelControls = useAnimation()
 
-  // Check if it's my turn - compare wallet addresses directly
-  // Prioritize local calculation (deterministic), WebSocket is backup confirmation
-  const localTurnWallet = currentShooter?.walletAddress || null
+  // Refs for cleanup and tracking
+  const timeouts = useRef<NodeJS.Timeout[]>([])
+  const heartbeatInterval = useRef<NodeJS.Timeout | null>(null)
+  const lastProcessedRound = useRef(room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1)
+  const barrelAngle = useRef(0)
+
+  const { play, stop, stopAll } = useSound()
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DERIVED STATE
+  // ═══════════════════════════════════════════════════════════════════════════
+  const mySeat = room.seats.find(s => s.walletAddress === myAddress)
+  const currentShooterIndex = room.currentTurnSeatIndex ?? -1
+  const currentShooter = room.seats.find(s => s.index === currentShooterIndex)
   const isMyTurn = !!(
     room.state === 'PLAYING' &&
-    myAddress &&
-    localTurnWallet &&
-    localTurnWallet === myAddress
+    mySeat?.alive &&
+    currentShooterIndex === mySeat.index
   )
-
-
-  // Barrel rotation - only changes when trigger is pulled
-  const cylinderRotation = spinOffset
-
-  // Get latest round result
+  const amIDead = mySeat && !mySeat.alive
+  const aliveCount = room.seats.filter(s => s.alive).length
   const latestRound = room.rounds[room.rounds.length - 1]
 
-  // My seat info (needed for result handling)
-  const mySeat = room.seats.find(s => s.walletAddress === myAddress)
-  const amIDead = mySeat && !mySeat.alive
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UTILITIES
+  // ═══════════════════════════════════════════════════════════════════════════
+  const clearAllTimeouts = useCallback(() => {
+    timeouts.current.forEach(clearTimeout)
+    timeouts.current = []
+    if (heartbeatInterval.current) {
+      clearInterval(heartbeatInterval.current)
+      heartbeatInterval.current = null
+    }
+  }, [])
 
-  // Memoize particle positions to prevent jumps on re-render
-  const particlePositions = useMemo(() =>
-    [...Array(6)].map((_, i) => ({
-      left: 20 + Math.random() * 60,
-      top: 20 + Math.random() * 60,
-      duration: 3 + i * 0.5,
-      delay: i * 0.8,
-      xOffset: i % 2 ? 10 : -10,
-    })), []
-  )
+  const schedule = useCallback((fn: () => void, ms: number) => {
+    const t = setTimeout(fn, ms)
+    timeouts.current.push(t)
+    return t
+  }, [])
 
-  // Handle round results - with drama for spectators too
+  // ═══════════════════════════════════════════════════════════════════════════
+  // THE SEQUENCE - Cinematic pull trigger animation
+  // ═══════════════════════════════════════════════════════════════════════════
+  const runSequence = useCallback(async (died: boolean, forSpectator: boolean) => {
+    clearAllTimeouts()
+    stopAll()
+    setDreadBeat(0)
+    setResultType(null)
+    setShowMuzzleFlash(false)
+    setShowReliefGlow(false)
+
+    const dreadDuration = forSpectator ? SCENE.dread.maxDuration : SCENE.dread.minDuration
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ACT 1: THE COCK
+    // The hammer slowly, deliberately pulls back
+    // ─────────────────────────────────────────────────────────────────────────
+    setPhase('cock')
+    play('cock')
+
+    // Hammer animation - slow, deliberate pull
+    hammerControls.start({
+      y: -16,
+      transition: {
+        duration: SCENE.cock.hammerRise.duration / 1000,
+        ease: [0.2, 0, 0.4, 1], // Slow start, smooth finish
+      }
+    })
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ACT 2: THE SPIN
+    // Barrel spins - fast at first, then decelerates
+    // ─────────────────────────────────────────────────────────────────────────
+    schedule(() => {
+      setPhase('spin')
+      play('cylinder-spin')
+
+      // Calculate final rotation (current + full spins + random offset)
+      const newAngle = barrelAngle.current + (SCENE.spin.rotations * 360) + Math.random() * 60
+      barrelAngle.current = newAngle
+
+      barrelControls.start({
+        rotate: newAngle,
+        transition: {
+          duration: SCENE.spin.duration / 1000,
+          ease: [0.1, 0.4, 0.2, 1], // Fast start, long deceleration
+        }
+      })
+    }, SCENE.spin.start)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ACT 3: THE DREAD
+    // Heartbeat builds tension - everything pulses
+    // ─────────────────────────────────────────────────────────────────────────
+    schedule(() => {
+      setPhase('dread')
+      play('heartbeat', { loop: true, volume: 0.85 })
+
+      // Start heartbeat visual sync
+      let beat = 0
+      heartbeatInterval.current = setInterval(() => {
+        beat++
+        setDreadBeat(beat)
+      }, SCENE.dread.beatInterval)
+    }, SCENE.dread.start)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ACT 4: THE MOMENT
+    // Result reveals - either devastating or relieving
+    // ─────────────────────────────────────────────────────────────────────────
+    schedule(() => {
+      // Stop the dread
+      stop('heartbeat')
+      if (heartbeatInterval.current) {
+        clearInterval(heartbeatInterval.current)
+        heartbeatInterval.current = null
+      }
+
+      if (died) {
+        // === BANG ===
+        setPhase('bang')
+        setResultType('bang')
+        setEliminatedSeat(latestRound?.shooterSeatIndex ?? currentShooterIndex)
+
+        // Muzzle flash
+        setShowMuzzleFlash(true)
+        schedule(() => setShowMuzzleFlash(false), SCENE.result.flashDuration)
+
+        // Hammer falls (fires)
+        hammerControls.start({
+          y: 0,
+          transition: { duration: 0.05, ease: 'easeIn' }
+        })
+
+        // Sound after tiny delay (flash first, then sound)
+        schedule(() => play('eliminated'), 30)
+
+      } else {
+        // === CLICK ===
+        setPhase('click')
+        setResultType('click')
+
+        // Hammer falls with softer click
+        hammerControls.start({
+          y: 0,
+          transition: { duration: 0.1, ease: 'easeOut' }
+        })
+
+        // Relief glow
+        setShowReliefGlow(true)
+        schedule(() => setShowReliefGlow(false), 300)
+
+        play('empty-click')
+      }
+    }, SCENE.dread.start + dreadDuration)
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ACT 5: RESET
+    // Prepare for next round
+    // ─────────────────────────────────────────────────────────────────────────
+    const resultSoundDuration = died ? AUDIO.eliminated : AUDIO.emptyClick
+    schedule(() => {
+      setPhase('reset')
+      setResultType(null)
+      setEliminatedSeat(null)
+      setCountdown(30)
+      play('reload')
+
+      // After reload sound, return to idle
+      schedule(() => {
+        setPhase('idle')
+      }, AUDIO.reload)
+
+    }, SCENE.dread.start + dreadDuration + resultSoundDuration + SCENE.reset.delay)
+
+  }, [clearAllTimeouts, stopAll, play, stop, hammerControls, barrelControls, latestRound?.shooterSeatIndex, currentShooterIndex, schedule])
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HANDLE SERVER ROUND RESULTS
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (room.state !== 'PLAYING') {
-      setPhase('waiting')
+      setPhase('idle')
+      clearAllTimeouts()
+      stopAll()
       return
     }
 
-    // Check if we have a NEW round result we haven't processed
     if (latestRound && latestRound.index > lastProcessedRound.current) {
       lastProcessedRound.current = latestRound.index
-
-      // If we're spectating (not our turn), add drama: spin barrel, brief tension, then result
       const wasMyTurn = latestRound.shooterSeatIndex === mySeat?.index
 
-      if (!wasMyTurn) {
-        // Spectator experience: show spinning animation first
-        setPhase('pulling')
-        setHammerCocked(true)
-        playSound('cock')
-        setSpinOffset(prev => prev + 720 + Math.random() * 360) // Spin the barrel!
-        const spinSoundTimer = setTimeout(() => playSound('cylinder-spin'), 150)
-
-        // After spin, show tension dots with heartbeat
-        // cylinder-spin is 3.3s, start heartbeat as spin winds down
-        const tensionTimer = setTimeout(() => {
-          setPhase('revealing')
-          playSound('heartbeat', { loop: true, volume: 0.6 })
-        }, 2800)
-
-        // Then show result - give heartbeat ~2s of dramatic tension
-        const resultTimer = setTimeout(() => {
-          stopSound('heartbeat')
-          setResult(latestRound.died ? 'bang' : 'click')
-          setPhase('result')
-
-          if (latestRound.died) {
-            playSound('eliminated')
-            setJustDiedSeatIndex(latestRound.shooterSeatIndex)
-            setShowFlash(true)
-            setTimeout(() => setShowFlash(false), 200)
-          } else {
-            playSound('empty-click')
-            setShowSurvivalFlash(true)
-            setTimeout(() => setShowSurvivalFlash(false), 300)
-          }
-        }, 4800)
-
-        // After showing result, transition to next turn
-        // eliminated is 3s, empty-click is 2s - wait for sounds to finish
-        const nextTurnTimer = setTimeout(() => {
-          setResult(null)
-          setJustDiedSeatIndex(null)
-          setHammerCocked(false)
-          setCountdown(30)
-          setPhase('waiting')
-          setTurnCheckTrigger(prev => prev + 1)
-          playSound('reload')
-        }, latestRound.died ? 8000 : 7000)
-
-        return () => {
-          clearTimeout(spinSoundTimer)
-          clearTimeout(tensionTimer)
-          clearTimeout(resultTimer)
-          clearTimeout(nextTurnTimer)
-          stopSound('heartbeat')
+      if (wasMyTurn) {
+        // I pulled - skip to result (already animating)
+        clearAllTimeouts()
+        stop('heartbeat')
+        if (heartbeatInterval.current) {
+          clearInterval(heartbeatInterval.current)
+          heartbeatInterval.current = null
         }
-      } else {
-        // It was our turn - we already saw the spinning, just show result
-        stopSound('heartbeat')
-        setResult(latestRound.died ? 'bang' : 'click')
-        setPhase('result')
 
         if (latestRound.died) {
-          playSound('eliminated')
-          setJustDiedSeatIndex(latestRound.shooterSeatIndex)
-          setShowFlash(true)
-          setTimeout(() => setShowFlash(false), 200)
+          setPhase('bang')
+          setResultType('bang')
+          setEliminatedSeat(latestRound.shooterSeatIndex)
+          setShowMuzzleFlash(true)
+          schedule(() => setShowMuzzleFlash(false), SCENE.result.flashDuration)
+          hammerControls.start({ y: 0, transition: { duration: 0.05 } })
+          schedule(() => play('eliminated'), 30)
         } else {
-          playSound('empty-click')
-          setShowSurvivalFlash(true)
-          setTimeout(() => setShowSurvivalFlash(false), 300)
+          setPhase('click')
+          setResultType('click')
+          hammerControls.start({ y: 0, transition: { duration: 0.1 } })
+          setShowReliefGlow(true)
+          schedule(() => setShowReliefGlow(false), 300)
+          play('empty-click')
         }
 
-        // After showing result, transition to next turn
-        // Wait for eliminated (3s) or empty-click (2s) to finish
-        const timer = setTimeout(() => {
-          setResult(null)
-          setJustDiedSeatIndex(null)
-          setHammerCocked(false)
-          setCountdown(30)
-          setPhase('waiting')
-          setTurnCheckTrigger(prev => prev + 1)
-          playSound('reload')
-        }, latestRound.died ? 3500 : 2500)
+        // Reset after result
+        const resultDuration = latestRound.died ? AUDIO.eliminated : AUDIO.emptyClick
+        schedule(() => {
+          setPhase('reset')
+          setResultType(null)
+          setEliminatedSeat(null)
+          play('reload')
+          schedule(() => setPhase('idle'), AUDIO.reload)
+        }, resultDuration + SCENE.reset.delay)
 
-        return () => {
-          clearTimeout(timer)
-          stopSound('heartbeat')
-        }
+      } else {
+        // Spectator - run full cinematic sequence
+        runSequence(latestRound.died, true)
       }
     }
-  }, [room.state, latestRound?.index, latestRound?.died, latestRound?.shooterSeatIndex, mySeat?.index, playSound, stopSound])
+  }, [room.state, latestRound, mySeat?.index, runSequence, clearAllTimeouts, stopAll, stop, play, hammerControls, schedule])
 
-  // Separate effect for turn detection - runs when turn changes
-  // Does NOT depend on phase to avoid race condition
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TURN DETECTION
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (room.state !== 'PLAYING') return
 
-    // Only update phase if we're in a state that should respond to turn changes
-    setPhase(currentPhase => {
-      // Don't interrupt active animation phases
-      if (currentPhase === 'pulling' || currentPhase === 'revealing') {
-        return currentPhase
-      }
+    // Don't interrupt active sequences
+    if (['cock', 'spin', 'dread', 'bang', 'click', 'reset'].includes(phase)) return
 
-      // Update based on whether it's our turn
-      // Note: 'result' phase is allowed to transition because turnCheckTrigger fires after result timeout
-      return isMyTurn ? 'your_turn' : 'waiting'
-    })
-
-    // Always reset countdown when turn changes (for both your turn and watching)
+    setPhase(isMyTurn ? 'ready' : 'idle')
     setCountdown(30)
-  }, [room.state, isMyTurn, currentRound, currentTurnWallet, turnCheckTrigger])
+  }, [room.state, isMyTurn, currentRound, currentTurnWallet, phase])
 
-  // Countdown timer with tick sound for final 10 seconds
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COUNTDOWN
+  // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
-    if (phase !== 'your_turn' && phase !== 'waiting') return
+    if (!['ready', 'idle'].includes(phase)) return
     if (room.state !== 'PLAYING') return
 
     const timer = setInterval(() => {
       setCountdown(prev => {
-        const next = prev <= 1 ? 0 : prev - 1
-        if (next <= 10 && next > 0 && phase === 'your_turn') {
-          playSound('countdown', { volume: 0.4 })
+        if (prev <= 1) return 0
+        if (prev <= 10 && phase === 'ready') {
+          play('countdown', { volume: 0.4 })
         }
-        return next
+        return prev - 1
       })
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [phase, room.state, playSound])
+  }, [phase, room.state, play])
 
-  const handlePullTrigger = useCallback(() => {
-    if (phase !== 'your_turn') return
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PULL TRIGGER HANDLER
+  // ═══════════════════════════════════════════════════════════════════════════
+  const handlePull = useCallback(() => {
+    if (phase !== 'ready') return
 
-    setPhase('pulling')
-    setHammerCocked(true)
-    playSound('cock')
-    setSpinOffset(prev => prev + 720 + Math.random() * 360)
-    setTimeout(() => playSound('cylinder-spin'), 150)
-
+    // Start the sequence - result will come from server
+    runSequence(false, false) // We don't know outcome yet, but sequence is same until result
     onPullTrigger?.()
+  }, [phase, runSequence, onPullTrigger])
 
-    // cylinder-spin is 3.3s, start heartbeat as spin winds down
-    setTimeout(() => {
-      setPhase('revealing')
-      playSound('heartbeat', { loop: true, volume: 0.6 })
-    }, 2800)
-  }, [phase, onPullTrigger, playSound])
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MEMOIZED VALUES
+  // ═══════════════════════════════════════════════════════════════════════════
+  const dustParticles = useMemo(() =>
+    Array.from({ length: 8 }, (_, i) => ({
+      x: 15 + Math.random() * 70,
+      y: 15 + Math.random() * 70,
+      size: 1 + Math.random() * 2,
+      duration: 4 + Math.random() * 3,
+      delay: Math.random() * 2,
+    })), []
+  )
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+  const isDreadPhase = phase === 'dread'
+  const isActionPhase = ['cock', 'spin', 'dread'].includes(phase)
+  const isResultPhase = ['bang', 'click'].includes(phase)
 
   return (
-    <div className={`relative w-full max-w-xl mx-auto ${amIDead ? 'chamber-dead' : ''}`}>
-      {/* Dead player blood vignette - James Bond style */}
-      <AnimatePresence>
-        {amIDead && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 1 }}
-            className="absolute inset-0 z-40 pointer-events-none rounded-3xl overflow-hidden"
-          >
-            <div
-              className="absolute inset-0"
-              style={{
-                background: 'radial-gradient(ellipse at center, transparent 20%, rgba(120, 0, 0, 0.4) 60%, rgba(80, 0, 0, 0.7) 100%)',
-                boxShadow: 'inset 0 0 150px rgba(139, 0, 0, 0.6)',
-              }}
-            />
-            {/* Dripping blood effect */}
-            <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-blood/40 to-transparent" />
-          </motion.div>
-        )}
-      </AnimatePresence>
+    <div className={`relative w-full max-w-xl mx-auto ${phase === 'bang' ? 'animate-shake' : ''}`}>
 
-      {/* Screen flash for BANG */}
+      {/* ══════════════════════════════════════════════════════════════════════
+          FULL-SCREEN OVERLAYS
+          ══════════════════════════════════════════════════════════════════════ */}
+
+      {/* Muzzle Flash - BANG */}
       <AnimatePresence>
-        {showFlash && (
+        {showMuzzleFlash && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.1 }}
-            className="fixed inset-0 z-50 pointer-events-none"
+            transition={{ duration: 0.02 }}
+            className="fixed inset-0 z-[100] pointer-events-none"
             style={{
-              background: 'radial-gradient(circle at center, rgba(255,200,150,0.9) 0%, rgba(255,100,50,0.8) 50%, rgba(139,0,0,0.9) 100%)',
+              background: 'radial-gradient(circle at 50% 40%, #fff 0%, #ffa500 20%, #ff4500 40%, rgba(139,0,0,0.9) 70%, rgba(0,0,0,0.8) 100%)',
             }}
           />
         )}
       </AnimatePresence>
 
-      {/* Screen flash for ALIVE */}
+      {/* Relief Glow - CLICK */}
       <AnimatePresence>
-        {showSurvivalFlash && (
+        {showReliefGlow && (
           <motion.div
             initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
+            animate={{ opacity: 0.6 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-50 pointer-events-none"
+            className="fixed inset-0 z-[100] pointer-events-none"
             style={{
-              background: 'radial-gradient(circle at center, rgba(16,185,129,0.4) 0%, rgba(16,185,129,0.2) 50%, transparent 100%)',
+              background: 'radial-gradient(circle at 50% 50%, rgba(34,197,94,0.4) 0%, transparent 60%)',
             }}
           />
         )}
       </AnimatePresence>
 
-      {/* Noir atmosphere gradient */}
-      <div className="absolute inset-0 rounded-3xl overflow-hidden pointer-events-none">
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-noir/50 to-noir" />
-      </div>
+      {/* Dread Vignette - pulses with heartbeat */}
+      <AnimatePresence>
+        {isDreadPhase && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{
+              opacity: dreadBeat % 2 === 0 ? 0.4 : 0.7,
+            }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-[60] pointer-events-none"
+            style={{
+              background: 'radial-gradient(ellipse at 50% 50%, transparent 20%, rgba(80,0,0,0.5) 60%, rgba(40,0,0,0.85) 100%)',
+            }}
+          />
+        )}
+      </AnimatePresence>
 
-      {/* Main Game Area */}
-      <div className="relative pt-8 pb-4">
-        {/* Stats - Round & Alive counters */}
-        <div className="absolute top-0 left-4 right-4 flex justify-between z-20">
+      {/* Dead player permanent vignette */}
+      {amIDead && (
+        <div
+          className="absolute inset-0 z-40 pointer-events-none rounded-3xl overflow-hidden"
+          style={{
+            background: 'radial-gradient(ellipse at center, transparent 10%, rgba(100,0,0,0.3) 50%, rgba(60,0,0,0.6) 100%)',
+          }}
+        />
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          MAIN CHAMBER AREA
+          ══════════════════════════════════════════════════════════════════════ */}
+
+      <div className="relative pt-6 pb-4">
+
+        {/* Stats Bar */}
+        <div className="flex justify-between items-center mb-6 px-2">
           <div className="text-center">
-            <p className="text-[9px] font-mono text-ember/80 uppercase tracking-[0.2em]">Alive</p>
-            <p className="text-3xl font-display text-alive-light drop-shadow-[0_0_10px_rgba(34,197,94,0.5)]">
-              {aliveSeats.length}
-            </p>
+            <div className="text-[10px] font-mono text-ash/60 uppercase tracking-widest">Alive</div>
+            <div className={`text-3xl font-display ${isDreadPhase ? 'text-blood-light' : 'text-alive-light'} transition-colors duration-200`}>
+              {aliveCount}
+            </div>
           </div>
           <div className="text-center">
-            <p className="text-[9px] font-mono text-ember/80 uppercase tracking-[0.2em]">Round</p>
-            <p className="text-3xl font-display text-gold drop-shadow-[0_0_10px_rgba(212,175,55,0.5)]">
+            <div className="text-[10px] font-mono text-ash/60 uppercase tracking-widest">Round</div>
+            <div className="text-3xl font-display text-gold">
               {currentRound + 1}
-            </p>
+            </div>
           </div>
         </div>
 
-        {/* The Chamber - Main Visual */}
-        <div className="relative aspect-square max-w-sm mx-auto mt-8">
-          {/* Ambient floating particles */}
+        {/* ════════════════════════════════════════════════════════════════════
+            THE CHAMBER - Visual centerpiece
+            ════════════════════════════════════════════════════════════════════ */}
+
+        <div className="relative aspect-square max-w-xs mx-auto">
+
+          {/* Ambient dust particles */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-full">
-            {particlePositions.map((particle, i) => (
+            {dustParticles.map((p, i) => (
               <motion.div
                 key={i}
-                className="absolute w-1 h-1 rounded-full bg-gold/30"
+                className="absolute rounded-full bg-gold/20"
                 style={{
-                  left: `${particle.left}%`,
-                  top: `${particle.top}%`,
+                  left: `${p.x}%`,
+                  top: `${p.y}%`,
+                  width: p.size,
+                  height: p.size,
                 }}
                 animate={{
-                  y: [0, -20, 0],
-                  x: [0, particle.xOffset, 0],
-                  opacity: [0, 0.6, 0],
-                  scale: [0.5, 1, 0.5],
+                  y: [0, -30, 0],
+                  opacity: [0, 0.5, 0],
                 }}
                 transition={{
+                  duration: p.duration,
+                  delay: p.delay,
                   repeat: Infinity,
-                  duration: particle.duration,
-                  delay: particle.delay,
                   ease: 'easeInOut',
                 }}
               />
             ))}
           </div>
 
-          {/* Outer glow based on game state */}
+          {/* Outer glow - responsive to phase */}
           <motion.div
-            className="absolute -inset-4 rounded-full blur-2xl pointer-events-none"
+            className="absolute -inset-6 rounded-full blur-3xl pointer-events-none"
             animate={{
-              background: phase === 'result' && result === 'click'
-                ? 'radial-gradient(circle, rgba(16,185,129,0.15) 0%, transparent 70%)'
-                : phase === 'result' && result === 'bang'
-                  ? 'radial-gradient(circle, rgba(139,0,0,0.2) 0%, transparent 70%)'
-                  : phase === 'your_turn'
-                    ? 'radial-gradient(circle, rgba(212,175,55,0.1) 0%, transparent 70%)'
-                    : 'radial-gradient(circle, rgba(212,175,55,0.05) 0%, transparent 70%)'
+              background: isDreadPhase
+                ? dreadBeat % 2 === 0
+                  ? 'radial-gradient(circle, rgba(139,0,0,0.15) 0%, transparent 70%)'
+                  : 'radial-gradient(circle, rgba(139,0,0,0.35) 0%, transparent 70%)'
+                : phase === 'bang'
+                  ? 'radial-gradient(circle, rgba(255,100,0,0.4) 0%, transparent 70%)'
+                  : phase === 'click'
+                    ? 'radial-gradient(circle, rgba(34,197,94,0.3) 0%, transparent 70%)'
+                    : phase === 'ready'
+                      ? 'radial-gradient(circle, rgba(212,175,55,0.2) 0%, transparent 70%)'
+                      : 'radial-gradient(circle, rgba(212,175,55,0.05) 0%, transparent 70%)'
             }}
-            transition={{ duration: 0.5 }}
+            transition={{ duration: 0.2 }}
           />
 
-          {/* Outer ring - gun barrel aesthetic */}
-          <div className="absolute inset-0 rounded-full bg-gradient-to-b from-gunmetal via-steel to-gunmetal shadow-[inset_0_4px_20px_rgba(0,0,0,0.8),inset_0_-4px_20px_rgba(255,255,255,0.05)]">
-            <div className="absolute inset-2 rounded-full border border-edge/30" />
+          {/* Gun frame (outer ring) */}
+          <div className="absolute inset-0 rounded-full bg-gradient-to-br from-gunmetal via-steel to-gunmetal shadow-[inset_0_4px_30px_rgba(0,0,0,0.8),0_0_40px_rgba(0,0,0,0.5)]">
+            <div className="absolute inset-3 rounded-full border border-edge/20" />
           </div>
 
-          {/* Cylinder with chambers */}
+          {/* ══════════════════════════════════════════════════════════════════
+              ROTATING BARREL
+              ══════════════════════════════════════════════════════════════════ */}
           <motion.div
-            className="absolute inset-6 rounded-full"
+            className="absolute inset-8 rounded-full"
             style={{
-              background: 'linear-gradient(145deg, #2a2a2a 0%, #1a1a1a 50%, #0a0a0a 100%)',
-              boxShadow: 'inset 0 0 40px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.5)',
+              background: 'conic-gradient(from 0deg, #1a1a1a, #2a2a2a, #1a1a1a, #2a2a2a, #1a1a1a, #2a2a2a, #1a1a1a)',
+              boxShadow: 'inset 0 0 50px rgba(0,0,0,0.9), inset 0 0 20px rgba(0,0,0,0.5)',
             }}
-            animate={{ rotate: cylinderRotation }}
-            transition={{
-              duration: phase === 'pulling' ? 1.5 : 0.8,
-              ease: phase === 'pulling' ? [0.16, 1, 0.3, 1] : 'easeOut'
-            }}
+            animate={barrelControls}
           >
+            {/* Center pin */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-gradient-to-br from-steel to-noir border border-edge/30 shadow-[inset_0_2px_8px_rgba(0,0,0,0.8)] z-10" />
+
             {/* Chamber holes */}
             {[0, 1, 2, 3, 4, 5].map((i) => {
               const angle = (i * 60 - 90) * (Math.PI / 180)
-              const radius = 36
+              const radius = 38
+              const x = 50 + radius * Math.cos(angle)
+              const y = 50 + radius * Math.sin(angle)
+              const seatHere = room.seats.find(s => s.index === i)
+              const isDead = (seatHere && !seatHere.alive) || eliminatedSeat === i
+
+              return (
+                <div
+                  key={i}
+                  className="absolute w-10 h-10 -translate-x-1/2 -translate-y-1/2"
+                  style={{ left: `${x}%`, top: `${y}%` }}
+                >
+                  <div className={`
+                    w-full h-full rounded-full
+                    ${isDead
+                      ? 'bg-gradient-to-br from-blood/70 to-blood-dark shadow-[inset_0_0_15px_rgba(0,0,0,0.8),0_0_12px_rgba(139,0,0,0.6)]'
+                      : 'bg-gradient-to-br from-void to-noir shadow-[inset_0_0_20px_rgba(0,0,0,0.95)]'
+                    }
+                    border border-edge/30
+                  `}>
+                    {isDead && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-2.5 h-2.5 rounded-full bg-blood-light/50" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </motion.div>
+
+          {/* ══════════════════════════════════════════════════════════════════
+              SEAT POSITION INDICATORS (fixed, outside barrel)
+              ══════════════════════════════════════════════════════════════════ */}
+          <div className="absolute inset-0 pointer-events-none">
+            {[0, 1, 2, 3, 4, 5].map((i) => {
+              const angle = (i * 60 - 90) * (Math.PI / 180)
+              const radius = 54
               const x = 50 + radius * Math.cos(angle)
               const y = 50 + radius * Math.sin(angle)
 
-              const seatAtChamber = room.seats[i]
-              // Show as dead if: room state says dead OR they just died this round (before room updates)
-              const isDead = (seatAtChamber && !seatAtChamber.alive) || justDiedSeatIndex === i
-              const isMe = seatAtChamber?.walletAddress === myAddress
-              const isCurrentShooter = i === currentShooterIndex
+              const seat = room.seats.find(s => s.index === i)
+              const isMe = seat?.walletAddress === myAddress
+              const isShooter = i === currentShooterIndex
+              const isDead = seat && !seat.alive
 
               return (
                 <motion.div
-                  key={i}
-                  className="absolute w-14 h-14 -translate-x-1/2 -translate-y-1/2"
+                  key={`indicator-${i}`}
+                  className="absolute -translate-x-1/2 -translate-y-1/2"
                   style={{ left: `${x}%`, top: `${y}%` }}
-                  animate={isCurrentShooter && phase === 'your_turn' ? { scale: [1, 1.05, 1] } : {}}
-                  transition={{ repeat: Infinity, duration: 1.5 }}
+                  animate={
+                    isShooter && phase === 'ready'
+                      ? { scale: [1, 1.2, 1] }
+                      : isShooter && isDreadPhase
+                        ? { scale: dreadBeat % 2 === 0 ? 1 : 1.15 }
+                        : {}
+                  }
+                  transition={{
+                    repeat: phase === 'ready' ? Infinity : 0,
+                    duration: phase === 'ready' ? 1 : 0.2
+                  }}
                 >
-                  <div
-                    className={`
-                      w-full h-full rounded-full
-                      flex items-center justify-center
-                      transition-all duration-500
-                      ${isDead
-                        ? 'bg-gradient-to-br from-blood/50 to-blood-dark/80 shadow-[inset_0_0_15px_rgba(0,0,0,0.8),0_0_20px_rgba(139,0,0,0.6)]'
-                        : 'bg-gradient-to-br from-noir via-void to-noir shadow-[inset_0_0_20px_rgba(0,0,0,0.9)]'
-                      }
-                      ${isMe && !isDead
-                        ? 'ring-2 ring-gold ring-offset-2 ring-offset-noir shadow-[0_0_15px_rgba(212,175,55,0.4)]'
-                        : ''
-                      }
-                      ${isCurrentShooter && !isDead
-                        ? 'border-2 border-gold/60'
-                        : 'border border-edge/40'
-                      }
-                    `}
-                  >
-                    {isDead ? (
-                      <motion.div
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        transition={{ duration: 0.3 }}
-                        className="text-blood-light"
-                      >
-                        <svg className="w-7 h-7 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                        </svg>
-                      </motion.div>
-                    ) : (
-                      <span className={`text-sm font-mono font-bold ${isMe ? 'text-gold' : isCurrentShooter ? 'text-chalk' : 'text-ash/70'}`}>
-                        {i + 1}
-                      </span>
-                    )}
+                  <div className={`
+                    w-7 h-7 rounded-full flex items-center justify-center
+                    text-[11px] font-mono font-bold transition-all duration-150
+                    ${isDead
+                      ? 'bg-blood/20 text-blood/40 border border-blood/20'
+                      : isMe
+                        ? 'bg-gold/25 text-gold border-2 border-gold shadow-[0_0_15px_rgba(212,175,55,0.5)]'
+                        : isShooter
+                          ? 'bg-white/10 text-chalk border-2 border-chalk/70 shadow-[0_0_10px_rgba(255,255,255,0.2)]'
+                          : 'bg-smoke/40 text-ash/50 border border-edge/40'
+                    }
+                  `}>
+                    {isDead ? '×' : i + 1}
                   </div>
+                  {isMe && !isDead && (
+                    <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[7px] font-mono text-gold/80 uppercase tracking-wider">
+                      you
+                    </div>
+                  )}
                 </motion.div>
               )
             })}
-
-            {/* Center axis */}
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-gradient-to-br from-gunmetal to-noir border border-edge/50 shadow-[inset_0_2px_10px_rgba(0,0,0,0.8)]" />
-          </motion.div>
-
-          {/* Firing pin / hammer */}
-          <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-20">
-            <motion.div
-              animate={{ y: hammerCocked ? -8 : 0 }}
-              transition={{ duration: 0.15, ease: 'easeOut' }}
-              className="relative"
-            >
-              {/* Glow */}
-              <motion.div
-                className="absolute -inset-4 rounded-full blur-xl"
-                animate={{
-                  background: phase === 'your_turn'
-                    ? ['rgba(212,175,55,0.3)', 'rgba(212,175,55,0.6)', 'rgba(212,175,55,0.3)']
-                    : 'rgba(212,175,55,0.2)'
-                }}
-                transition={{ repeat: Infinity, duration: 1 }}
-              />
-              {/* Pin body */}
-              <div className="relative w-8 h-10 bg-gradient-to-b from-gold via-gold-dark to-steel rounded-t-full shadow-lg border border-gold/30" />
-              {/* Arrow point */}
-              <div className="w-0 h-0 mx-auto border-l-[16px] border-l-transparent border-r-[16px] border-r-transparent border-t-[20px] border-t-gold-dark drop-shadow-lg" />
-            </motion.div>
           </div>
 
-          {/* Fire label - positioned separately below the pin */}
+          {/* ══════════════════════════════════════════════════════════════════
+              FIRING PIN / HAMMER
+              ══════════════════════════════════════════════════════════════════ */}
           <motion.div
-            className="absolute top-[72px] left-1/2 -translate-x-1/2 z-10 text-center"
-            animate={phase === 'your_turn' ? { opacity: [1, 0.3, 1] } : { opacity: 0.5 }}
-            transition={{ repeat: Infinity, duration: 0.6 }}
+            className="absolute inset-0 z-20 pointer-events-none"
+            animate={{ rotate: currentShooterIndex >= 0 ? currentShooterIndex * 60 : 0 }}
+            transition={{ duration: 0.35, ease: 'easeOut' }}
           >
-            <span className="text-[10px] font-mono text-gold uppercase tracking-[0.3em] drop-shadow-[0_0_10px_rgba(212,175,55,0.5)]">
-              Fire
-            </span>
+            <div className="absolute -top-1 left-1/2 -translate-x-1/2">
+              <motion.div
+                animate={hammerControls}
+                initial={{ y: 0 }}
+                className="relative"
+              >
+                {/* Hammer glow */}
+                <motion.div
+                  className="absolute -inset-2 rounded-full blur-md"
+                  animate={{
+                    background: isDreadPhase
+                      ? dreadBeat % 2 === 0
+                        ? 'rgba(139,0,0,0.3)'
+                        : 'rgba(139,0,0,0.6)'
+                      : phase === 'ready'
+                        ? 'rgba(212,175,55,0.5)'
+                        : 'rgba(212,175,55,0.15)'
+                  }}
+                  transition={{ duration: 0.15 }}
+                />
+                {/* Hammer body */}
+                <div className="relative w-5 h-7 bg-gradient-to-b from-gold via-gold-dark to-steel rounded-t-full shadow-lg border border-gold/40" />
+                {/* Hammer point */}
+                <div className="w-0 h-0 mx-auto border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[14px] border-t-gold-dark" />
+              </motion.div>
+            </div>
           </motion.div>
+
         </div>
 
-        {/* Game Status & Controls */}
-        <div className="mt-10 text-center min-h-[180px]">
-          {room.state === 'PLAYING' && (
-            <AnimatePresence mode="wait">
-              {/* Waiting for other player */}
-              {phase === 'waiting' && currentShooter && (
-                <motion.div
-                  key="waiting"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                  className="space-y-4"
-                >
-                  {/* Current player indicator */}
-                  <div className="flex items-center justify-center gap-3">
-                    <motion.div
-                      className="w-10 h-10 rounded-full bg-gradient-to-br from-ember/30 to-ember/10 border border-ember/40 flex items-center justify-center"
-                      animate={{ boxShadow: ['0 0 0 0 rgba(245,158,11,0.4)', '0 0 0 12px rgba(245,158,11,0)', '0 0 0 0 rgba(245,158,11,0)'] }}
-                      transition={{ repeat: Infinity, duration: 2 }}
-                    >
-                      <span className="font-display text-ember text-lg">{currentShooterIndex + 1}</span>
-                    </motion.div>
-                    <div className="text-left">
-                      <p className="text-chalk font-display text-sm tracking-wide">
-                        Seat {currentShooterIndex + 1}
-                      </p>
-                      <p className="text-ash/50 text-[10px] font-mono">
-                        {currentShooter.walletAddress?.slice(0, 8)}...{currentShooter.walletAddress?.slice(-4)}
-                      </p>
-                    </div>
-                  </div>
+        {/* ════════════════════════════════════════════════════════════════════
+            STATUS / CONTROLS AREA
+            ════════════════════════════════════════════════════════════════════ */}
 
-                  {/* Watching badge with countdown */}
-                  <div className="flex items-center justify-center gap-3">
-                    <div className="flex items-center gap-2 px-4 py-2 bg-smoke/20 border border-edge/30 rounded-full">
-                      <motion.div
-                        className="w-1.5 h-1.5 rounded-full bg-gold"
-                        animate={{ opacity: [1, 0.3, 1] }}
-                        transition={{ repeat: Infinity, duration: 1.2 }}
-                      />
-                      <span className="text-ash/70 font-mono text-xs uppercase tracking-wider">Watching</span>
-                    </div>
+        <div className="mt-8 text-center min-h-[160px]">
+          <AnimatePresence mode="wait">
 
-                    <motion.div
-                      className={`
-                        px-4 py-2 rounded-full font-mono text-sm font-medium
-                        ${countdown <= 10
-                          ? 'bg-blood/20 border border-blood/40 text-blood-light'
-                          : 'bg-smoke/20 border border-edge/30 text-ash/70'
-                        }
-                      `}
-                      animate={countdown <= 10 ? { scale: [1, 1.05, 1] } : {}}
-                      transition={{ repeat: Infinity, duration: 0.5 }}
-                    >
-                      {countdown}s
-                    </motion.div>
-                  </div>
-
-                  {/* Subtle waiting animation */}
-                  <div className="flex justify-center gap-1 pt-2">
-                    {[0, 1, 2].map((i) => (
-                      <motion.div
-                        key={i}
-                        className="w-1.5 h-1.5 rounded-full bg-ash/30"
-                        animate={{ opacity: [0.3, 0.8, 0.3] }}
-                        transition={{ repeat: Infinity, duration: 1.2, delay: i * 0.2 }}
-                      />
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              {/* YOUR TURN - The main action state */}
-              {phase === 'your_turn' && (
-                <motion.div
-                  key="your_turn"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  className="space-y-6"
-                >
-                  <div className="flex items-center justify-center gap-6">
-                    <motion.h2
-                      className="text-gold font-display text-3xl tracking-widest drop-shadow-[0_0_20px_rgba(212,175,55,0.5)]"
-                      animate={{ opacity: [1, 0.6, 1] }}
-                      transition={{ repeat: Infinity, duration: 1.2 }}
-                    >
-                      YOUR TURN
-                    </motion.h2>
-                    <motion.div
-                      className={`
-                        relative px-5 py-2 rounded-xl font-mono text-2xl font-bold border-2
-                        ${countdown <= 10
-                          ? 'bg-blood/40 border-blood text-blood-light shadow-[0_0_20px_rgba(139,0,0,0.5)]'
-                          : 'bg-smoke/30 border-gold/50 text-gold'
-                        }
-                      `}
-                      animate={countdown <= 10 ? { scale: [1, 1.08, 1] } : {}}
-                      transition={{ repeat: Infinity, duration: 0.4 }}
-                    >
-                      {countdown}
-                    </motion.div>
-                  </div>
-
-                  {/* THE TRIGGER BUTTON - native button for reliable mobile touch */}
-                  <button
-                    onClick={handlePullTrigger}
-                    type="button"
-                    className="relative px-16 py-5 min-h-[60px] bg-gradient-to-b from-blood via-blood to-blood-dark border-2 border-blood-light/80 rounded-2xl font-display text-2xl tracking-[0.2em] text-chalk shadow-[0_0_40px_rgba(139,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.1)] hover:shadow-[0_0_60px_rgba(139,0,0,0.8),inset_0_1px_0_rgba(255,255,255,0.2)] hover:scale-105 hover:border-blood-light active:scale-95 active:shadow-[0_0_20px_rgba(139,0,0,0.4)] transition-all duration-200 overflow-hidden cursor-pointer touch-manipulation select-none"
-                    style={{ WebkitTapHighlightColor: 'transparent' }}
+            {/* IDLE - Watching */}
+            {phase === 'idle' && currentShooter && (
+              <motion.div
+                key="idle"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                className="space-y-3"
+              >
+                <div className="flex items-center justify-center gap-3">
+                  <motion.div
+                    className="w-9 h-9 rounded-full bg-ember/20 border border-ember/30 flex items-center justify-center"
+                    animate={{
+                      boxShadow: ['0 0 0 0 rgba(245,158,11,0.3)', '0 0 0 10px rgba(245,158,11,0)', '0 0 0 0 rgba(245,158,11,0)']
+                    }}
+                    transition={{ repeat: Infinity, duration: 2 }}
                   >
-                    <span className="relative z-10 pointer-events-none">PULL TRIGGER</span>
-                    {/* Shimmer effect */}
-                    <motion.div
-                      className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-12 pointer-events-none"
-                      animate={{ x: ['-200%', '200%'] }}
-                      transition={{ repeat: Infinity, duration: 2.5, ease: 'linear' }}
-                    />
-                    {/* Pulse ring */}
-                    <motion.div
-                      className="absolute inset-0 rounded-2xl border-2 border-blood-light pointer-events-none"
-                      animate={{ scale: [1, 1.05, 1], opacity: [0.5, 0, 0.5] }}
-                      transition={{ repeat: Infinity, duration: 1.5 }}
-                    />
-                  </button>
+                    <span className="font-display text-ember">{currentShooterIndex + 1}</span>
+                  </motion.div>
+                  <div className="text-left">
+                    <p className="text-chalk/90 font-display text-sm">Seat {currentShooterIndex + 1}</p>
+                    <p className="text-ash/40 text-[10px] font-mono">
+                      {currentShooter.walletAddress?.slice(0, 6)}...{currentShooter.walletAddress?.slice(-4)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-center gap-2">
+                  <span className="text-ash/50 text-xs font-mono uppercase tracking-wider">watching</span>
+                  <span className={`px-3 py-1 rounded-full text-sm font-mono ${
+                    countdown <= 10 ? 'bg-blood/20 text-blood-light' : 'bg-smoke/30 text-ash/60'
+                  }`}>
+                    {countdown}s
+                  </span>
+                </div>
+              </motion.div>
+            )}
 
-                  <p className="text-blood-light/80 text-sm font-mono uppercase tracking-wider">
-                    1 in {Math.max(1, 6 - room.rounds.length)} chance
-                  </p>
-                </motion.div>
-              )}
+            {/* READY - My turn */}
+            {phase === 'ready' && (
+              <motion.div
+                key="ready"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="space-y-5"
+              >
+                <div className="flex items-center justify-center gap-4">
+                  <motion.h2
+                    className="text-gold font-display text-2xl tracking-[0.15em]"
+                    animate={{ opacity: [1, 0.5, 1] }}
+                    transition={{ repeat: Infinity, duration: 1.2 }}
+                  >
+                    YOUR TURN
+                  </motion.h2>
+                  <motion.span
+                    className={`px-4 py-1.5 rounded-lg font-mono text-xl font-bold border-2 ${
+                      countdown <= 10
+                        ? 'bg-blood/30 border-blood text-blood-light'
+                        : 'bg-smoke/20 border-gold/40 text-gold'
+                    }`}
+                    animate={countdown <= 10 ? { scale: [1, 1.1, 1] } : {}}
+                    transition={{ repeat: Infinity, duration: 0.4 }}
+                  >
+                    {countdown}
+                  </motion.span>
+                </div>
 
-              {/* Pulling - Suspense */}
-              {phase === 'pulling' && (
-                <motion.div
-                  key="pulling"
+                <button
+                  onClick={handlePull}
+                  className="relative px-14 py-4 bg-gradient-to-b from-blood via-blood to-blood-dark border-2 border-blood-light/70 rounded-xl font-display text-xl tracking-[0.2em] text-chalk shadow-[0_0_30px_rgba(139,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.1)] hover:shadow-[0_0_50px_rgba(139,0,0,0.7)] hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                >
+                  PULL TRIGGER
+                  <motion.div
+                    className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -skew-x-12"
+                    animate={{ x: ['-200%', '200%'] }}
+                    transition={{ repeat: Infinity, duration: 2.5, ease: 'linear' }}
+                  />
+                </button>
+
+                <p className="text-blood-light/60 text-xs font-mono uppercase tracking-wider">
+                  1 in {Math.max(1, 6 - room.rounds.length)} chance
+                </p>
+              </motion.div>
+            )}
+
+            {/* COCK - Hammer pulling back */}
+            {phase === 'cock' && (
+              <motion.div
+                key="cock"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="py-6"
+              >
+                <motion.p
+                  className="text-ember font-mono uppercase tracking-[0.25em]"
+                  animate={{ opacity: [0.4, 1, 0.4] }}
+                  transition={{ repeat: Infinity, duration: 0.6 }}
+                >
+                  {isMyTurn ? 'cocking...' : `seat ${currentShooterIndex + 1} cocks...`}
+                </motion.p>
+              </motion.div>
+            )}
+
+            {/* SPIN - Barrel rotating */}
+            {phase === 'spin' && (
+              <motion.div
+                key="spin"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="py-4 space-y-2"
+              >
+                <motion.p
+                  className="text-gold font-display text-2xl tracking-[0.3em]"
+                  animate={{ opacity: [1, 0.4, 1] }}
+                  transition={{ repeat: Infinity, duration: 0.12 }}
+                >
+                  SPINNING
+                </motion.p>
+                <p className="text-gold/50 text-xs font-mono uppercase tracking-wider">
+                  {isMyTurn ? 'your fate spins...' : `seat ${currentShooterIndex + 1} spins...`}
+                </p>
+              </motion.div>
+            )}
+
+            {/* DREAD - Heartbeat tension */}
+            {phase === 'dread' && (
+              <motion.div
+                key="dread"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.1 }}
+                className="py-4 space-y-3"
+              >
+                {/* Heartbeat bars */}
+                <div className="flex items-center justify-center gap-1">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <motion.div
+                      key={i}
+                      className="w-1.5 bg-blood-light rounded-full"
+                      animate={{
+                        height: dreadBeat % 2 === 0 ? 6 : 35,
+                        opacity: dreadBeat % 2 === 0 ? 0.4 : 1,
+                      }}
+                      transition={{ duration: 0.12, delay: i * 0.025 }}
+                    />
+                  ))}
+                </div>
+
+                <motion.p
+                  className="text-chalk/80 font-display text-4xl tracking-[0.4em]"
+                  animate={{
+                    scale: dreadBeat % 2 === 0 ? 1 : 1.15,
+                    opacity: dreadBeat % 2 === 0 ? 0.6 : 1,
+                  }}
+                  transition={{ duration: 0.12 }}
+                >
+                  . . .
+                </motion.p>
+              </motion.div>
+            )}
+
+            {/* BANG - Death */}
+            {phase === 'bang' && resultType === 'bang' && (
+              <motion.div
+                key="bang"
+                initial={{ opacity: 0, scale: 3 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.15, ease: 'easeOut' }}
+                className="py-2"
+              >
+                <motion.p
+                  className="text-blood-light font-display text-6xl tracking-wider"
+                  style={{ textShadow: '0 0 60px rgba(220,20,60,0.9)' }}
+                >
+                  BANG!
+                </motion.p>
+                <motion.p
+                  className="text-blood/80 text-sm mt-3 font-display tracking-wide"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2 }}
+                >
+                  {latestRound?.shooterSeatIndex === mySeat?.index
+                    ? "💀 YOU'RE OUT"
+                    : `💀 SEAT ${(eliminatedSeat ?? 0) + 1} ELIMINATED`}
+                </motion.p>
+              </motion.div>
+            )}
+
+            {/* CLICK - Survival */}
+            {phase === 'click' && resultType === 'click' && (
+              <motion.div
+                key="click"
+                initial={{ opacity: 0, scale: 0.5 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ type: 'spring', damping: 12, stiffness: 200 }}
+                className="py-2"
+              >
+                <p className="text-ash/50 font-mono text-sm tracking-widest mb-1">*click*</p>
+                <motion.p
+                  className="text-alive-light font-display text-5xl tracking-wider"
+                  style={{ textShadow: '0 0 40px rgba(34,197,94,0.7)' }}
+                  animate={{ scale: [1, 1.1, 1] }}
+                  transition={{ duration: 0.3 }}
+                >
+                  ALIVE!
+                </motion.p>
+                <motion.p
+                  className="text-alive/70 text-sm mt-2 font-mono uppercase tracking-wider"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="space-y-4"
+                  transition={{ delay: 0.15 }}
                 >
-                  {/* Who's pulling indicator */}
-                  <motion.p
-                    className="text-ember/80 font-mono text-xs uppercase tracking-[0.3em]"
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                  >
-                    {isMyTurn ? 'You pull the trigger...' : `Seat ${currentShooterIndex + 1} pulls...`}
-                  </motion.p>
+                  {latestRound?.shooterSeatIndex === mySeat?.index
+                    ? 'you survived!'
+                    : `seat ${(latestRound?.shooterSeatIndex ?? 0) + 1} survives`}
+                </motion.p>
+              </motion.div>
+            )}
 
-                  {/* Spinning chamber visual */}
-                  <div className="relative w-24 h-24 mx-auto">
-                    <motion.div
-                      className="absolute inset-0 rounded-full border-4 border-gold/40"
-                      style={{ borderTopColor: 'transparent', borderRightColor: 'transparent' }}
-                      animate={{ rotate: 360 }}
-                      transition={{ repeat: Infinity, duration: 0.5, ease: 'linear' }}
-                    />
-                    <motion.div
-                      className="absolute inset-2 rounded-full border-2 border-ember/30"
-                      style={{ borderBottomColor: 'transparent' }}
-                      animate={{ rotate: -360 }}
-                      transition={{ repeat: Infinity, duration: 0.7, ease: 'linear' }}
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <motion.div
-                        className="w-3 h-3 rounded-full bg-gold"
-                        animate={{ scale: [1, 1.3, 1], opacity: [0.8, 1, 0.8] }}
-                        transition={{ repeat: Infinity, duration: 0.3 }}
-                      />
-                    </div>
-                  </div>
+            {/* RESET */}
+            {phase === 'reset' && (
+              <motion.div
+                key="reset"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="py-6"
+              >
+                <p className="text-ash/60 font-mono text-sm uppercase tracking-wider">
+                  reloading chamber...
+                </p>
+              </motion.div>
+            )}
 
-                  <motion.p
-                    className="text-gold font-display text-xl tracking-[0.4em]"
-                    animate={{ opacity: [1, 0.5, 1] }}
-                    transition={{ repeat: Infinity, duration: 0.25 }}
-                  >
-                    SPINNING
-                  </motion.p>
-                </motion.div>
-              )}
+          </AnimatePresence>
 
-              {/* Revealing - Maximum tension */}
-              {phase === 'revealing' && (
-                <motion.div
-                  key="revealing"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 1.1 }}
-                  className="py-6 space-y-4"
-                >
-                  {/* Heartbeat line */}
-                  <div className="flex items-center justify-center gap-1">
-                    {[0, 1, 2, 3, 4].map((i) => (
-                      <motion.div
-                        key={i}
-                        className="w-1 bg-blood-light rounded-full"
-                        animate={{ height: ['8px', '32px', '8px'] }}
-                        transition={{
-                          repeat: Infinity,
-                          duration: 0.4,
-                          delay: i * 0.08,
-                          ease: 'easeInOut'
-                        }}
-                      />
-                    ))}
-                  </div>
-
-                  <motion.p
-                    className="text-chalk/90 font-display text-4xl tracking-[0.5em]"
-                    animate={{
-                      scale: [1, 1.08, 1],
-                      textShadow: [
-                        '0 0 20px rgba(255,255,255,0.3)',
-                        '0 0 40px rgba(255,255,255,0.6)',
-                        '0 0 20px rgba(255,255,255,0.3)'
-                      ]
-                    }}
-                    transition={{ repeat: Infinity, duration: 0.5 }}
-                  >
-                    • • •
-                  </motion.p>
-
-                  <motion.p
-                    className="text-ash/50 font-mono text-[10px] uppercase tracking-widest"
-                    animate={{ opacity: [0.3, 0.7, 0.3] }}
-                    transition={{ repeat: Infinity, duration: 0.6 }}
-                  >
-                    Fate decides
-                  </motion.p>
-                </motion.div>
-              )}
-
-              {/* Result - CLICK/ALIVE or BANG */}
-              {phase === 'result' && result && (
-                <motion.div
-                  key="result"
-                  initial={{ opacity: 0, scale: 0.5 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ type: 'spring', damping: 8, stiffness: 200 }}
-                  className="py-4"
-                >
-                  {result === 'click' ? (
-                    <motion.div
-                      initial={{ scale: 0.5, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ type: 'spring', damping: 10, stiffness: 300 }}
-                      className="relative"
-                    >
-                      {/* Green glow burst */}
-                      <motion.div
-                        className="absolute inset-0 -z-10 flex items-center justify-center"
-                        initial={{ scale: 0, opacity: 0 }}
-                        animate={{ scale: [0, 2, 2.5], opacity: [0, 0.6, 0] }}
-                        transition={{ duration: 0.8 }}
-                      >
-                        <div className="w-40 h-40 rounded-full bg-alive-light blur-3xl" />
-                      </motion.div>
-
-                      {/* Click sound effect text */}
-                      <motion.p
-                        className="text-ash/60 font-mono text-lg tracking-widest mb-2"
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: [0, 1, 1, 0.5], y: 0 }}
-                        transition={{ duration: 0.6 }}
-                      >
-                        *click*
-                      </motion.p>
-
-                      {/* Main ALIVE text */}
-                      <motion.p
-                        className="text-alive-light font-display text-6xl tracking-wider drop-shadow-[0_0_40px_rgba(34,197,94,0.8)]"
-                        initial={{ scale: 0.5, y: 20 }}
-                        animate={{ scale: [1, 1.15, 1], y: 0 }}
-                        transition={{ duration: 0.5, times: [0, 0.6, 1] }}
-                      >
-                        ALIVE!
-                      </motion.p>
-
-                      {/* Subtitle */}
-                      <motion.p
-                        className="text-alive/80 text-sm mt-3 font-mono uppercase tracking-wider"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: 0.3 }}
-                      >
-                        {latestRound?.shooterSeatIndex === mySeat?.index
-                          ? "You survived this round!"
-                          : `Seat ${(latestRound?.shooterSeatIndex ?? 0) + 1} survives`
-                        }
-                      </motion.p>
-                    </motion.div>
-                  ) : (
-                    <motion.div className="relative">
-                      {/* Red flash burst */}
-                      <motion.div
-                        className="absolute inset-0 -z-10 flex items-center justify-center"
-                        initial={{ scale: 0, opacity: 0 }}
-                        animate={{ scale: [0, 3, 4], opacity: [0, 0.8, 0] }}
-                        transition={{ duration: 0.5 }}
-                      >
-                        <div className="w-60 h-60 rounded-full bg-blood-light blur-3xl" />
-                      </motion.div>
-
-                      {/* Main BANG text */}
-                      <motion.p
-                        className="text-blood-light font-display text-7xl tracking-wider drop-shadow-[0_0_60px_rgba(239,68,68,0.9)]"
-                        initial={{ scale: 4, opacity: 0, rotate: -15 }}
-                        animate={{ scale: 1, opacity: 1, rotate: 0 }}
-                        transition={{ duration: 0.3, ease: 'easeOut' }}
-                      >
-                        BANG!
-                      </motion.p>
-
-                      {/* Shake effect on the text */}
-                      <motion.div
-                        animate={{ x: [0, -5, 5, -5, 5, 0] }}
-                        transition={{ duration: 0.4, delay: 0.3 }}
-                      >
-                        <motion.p
-                          className="text-blood text-lg mt-4 font-display tracking-wide"
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: 0.4 }}
-                        >
-                          {latestRound?.shooterSeatIndex === mySeat?.index
-                            ? "💀 YOU'RE OUT"
-                            : `💀 SEAT ${(latestRound?.shooterSeatIndex ?? 0) + 1} ELIMINATED`
-                          }
-                        </motion.p>
-                      </motion.div>
-                    </motion.div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          )}
-
-          {/* Dead player message */}
-          {amIDead && phase !== 'result' && (
+          {/* Dead player permanent message */}
+          {amIDead && !isActionPhase && !isResultPhase && phase !== 'reset' && (
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
-              className="mt-6 p-5 bg-blood/10 border border-blood/30 rounded-xl backdrop-blur-sm"
+              className="mt-4 p-4 bg-blood/10 border border-blood/25 rounded-xl"
             >
-              <p className="text-blood-light font-display text-lg tracking-wider">ELIMINATED</p>
-              <p className="text-ash/60 text-sm mt-2">Watching the remaining players...</p>
+              <p className="text-blood-light/80 font-display tracking-wider">ELIMINATED</p>
+              <p className="text-ash/50 text-xs mt-1">watching the survivors...</p>
             </motion.div>
           )}
         </div>
+
       </div>
 
-      {/* CSS for dead state */}
+      {/* CSS Animations */}
       <style jsx>{`
-        .chamber-dead {
-          animation: deadPulse 3s ease-in-out infinite;
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+          20%, 40%, 60%, 80% { transform: translateX(5px); }
         }
-        @keyframes deadPulse {
-          0%, 100% { box-shadow: 0 0 60px rgba(139, 0, 0, 0.3); }
-          50% { box-shadow: 0 0 80px rgba(139, 0, 0, 0.5); }
+        .animate-shake {
+          animation: shake 0.35s ease-in-out;
         }
       `}</style>
     </div>

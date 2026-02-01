@@ -19,6 +19,7 @@ import { ChamberGame } from '../../../components/game/ChamberGame'
 import { GameFinishedOverlay } from '../../../components/game/GameFinishedOverlay'
 import type { Room, Seat } from '../../../../shared/index'
 import { formatKAS } from '../../../lib/format'
+import config from '../../../lib/config'
 
 function getSeatStatus(seat: Seat | undefined, roomState: string): 'empty' | 'joined' | 'deposited' | 'confirmed' | 'alive' | 'dead' {
   if (!seat) return 'empty'
@@ -52,18 +53,18 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [depositFailed, setDepositFailed] = useState(false)
   const [depositSent, setDepositSent] = useState(false)
   const [retryingDeposit, setRetryingDeposit] = useState(false)
+  const [lockCountdown, setLockCountdown] = useState<number | null>(null)
   const prevRoomStateRef = useRef<string | null>(null)
+  const lockStartTimeRef = useRef<number | null>(null)
   const hasJoinedRef = useRef(false)
   const toast = useToast()
 
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:4002'
   const explorerUrl = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://kaspa.stream'
-  const ws = useWebSocket(wsUrl)
+  const ws = useWebSocket(config.ws.url)
 
   const fetchRoom = useCallback(async (): Promise<Room | null> => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4001'
-      const response = await fetch(`${apiUrl}/api/rooms/${roomId}`)
+      const response = await fetch(`${config.api.baseUrl}/api/rooms/${roomId}`)
 
       if (!response.ok) {
         setLoading(false)
@@ -218,11 +219,12 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         const seedMessage = `${roomId}|${mySeat.index}|${address}`
         const signature = await signMessage(seedMessage)
 
-        // Now send the deposit
+        // Now send the deposit to the SEAT's deposit address (not room-level)
+        // The deposit monitor watches per-seat addresses to confirm deposits
         toast.info('Sending deposit...')
         const amountSompi = Math.floor(updatedRoom.seatPrice * 100000000)
         try {
-          await sendKaspa(updatedRoom.depositAddress, amountSompi)
+          await sendKaspa(mySeat.depositAddress, amountSompi)
           toast.success('Deposit sent! Waiting for confirmation...')
           setDepositSent(true)
           setDepositFailed(false)
@@ -266,10 +268,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       const seedMessage = `${room.id}|${mySeat.index}|${address}`
       const signature = await signMessage(seedMessage)
 
-      // Now send the deposit
+      // Now send the deposit to the SEAT's deposit address (not room-level)
       toast.info('Sending deposit...')
       const amountSompi = Math.floor(room.seatPrice * 100000000)
-      await sendKaspa(room.depositAddress, amountSompi)
+      await sendKaspa(mySeat.depositAddress, amountSompi)
       toast.success('Deposit sent! Waiting for confirmation...')
       setDepositSent(true)
       setDepositFailed(false)
@@ -296,6 +298,32 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       setShowGameFinished(true)
     }
     prevRoomStateRef.current = room.state
+  }, [room?.state])
+
+  // Countdown timer for LOCKED state (awaiting settlement block)
+  useEffect(() => {
+    if (!room) return
+
+    if (room.state === 'LOCKED') {
+      // Start countdown when entering LOCKED state
+      if (!lockStartTimeRef.current) {
+        lockStartTimeRef.current = Date.now()
+        // ~5 blocks at ~1 sec/block = ~5 seconds
+        setLockCountdown(5)
+      }
+
+      const interval = setInterval(() => {
+        const elapsed = (Date.now() - lockStartTimeRef.current!) / 1000
+        const remaining = Math.max(0, 5 - Math.floor(elapsed))
+        setLockCountdown(remaining)
+      }, 100)
+
+      return () => clearInterval(interval)
+    } else {
+      // Reset when leaving LOCKED state
+      lockStartTimeRef.current = null
+      setLockCountdown(null)
+    }
   }, [room?.state])
 
   if (initializing || loading) {
@@ -399,10 +427,25 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                 </span>
                 <span className="text-xs text-ash">/{room.maxPlayers}</span>
               </div>
-              <div className="bg-smoke/50 border border-edge p-4 rounded-xl">
+              <div className="bg-smoke/50 border border-edge p-4 rounded-xl flex-1">
                 <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Pot</span>
-                <span className="font-display text-xl text-alive-light">{formatKAS(pot, 0)}</span>
-                <span className="text-xs text-ash ml-1">KAS</span>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-display text-xl text-alive-light">{formatKAS(pot, 0)}</span>
+                  <span className="text-xs text-ash">/ {formatKAS(room.seatPrice * room.maxPlayers, 0)} KAS</span>
+                </div>
+                <div className="mt-2 h-2 bg-bg rounded-full overflow-hidden">
+                  <div
+                    className={`h-full bg-gradient-to-r from-alive to-alive-light rounded-full transition-all duration-700 ease-out ${
+                      room.seats.filter(s => s.confirmed).length > 0 &&
+                      room.seats.filter(s => s.confirmed).length < room.maxPlayers
+                        ? 'animate-pot-fill'
+                        : ''
+                    }`}
+                    style={{
+                      width: `${(room.seats.filter(s => s.confirmed).length / room.maxPlayers) * 100}%`,
+                    }}
+                  />
+                </div>
               </div>
               <div className="bg-smoke/50 border border-edge p-4 rounded-xl">
                 <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">House</span>
@@ -517,13 +560,43 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         {room.state === 'LOCKED' && (
           <Card className="border-gold/30 bg-gold-muted">
             <CardContent>
-              <div className="flex items-center justify-center gap-3">
-                <svg className="w-5 h-5 text-gold animate-pulse" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-                </svg>
-                <p className="text-gold font-mono text-sm uppercase tracking-wider">
-                  Chamber locked. Awaiting settlement block...
-                </p>
+              <div className="flex flex-col items-center gap-4">
+                <div className="flex items-center gap-3">
+                  <svg className="w-5 h-5 text-gold animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                  </svg>
+                  <p className="text-gold font-mono text-sm uppercase tracking-wider">
+                    Chamber locked. Game starting...
+                  </p>
+                </div>
+                {lockCountdown !== null && (
+                  <div className="flex items-center gap-4">
+                    <div className="relative w-16 h-16">
+                      <svg className="w-16 h-16 -rotate-90" viewBox="0 0 36 36">
+                        <circle
+                          cx="18" cy="18" r="16"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          className="text-edge"
+                        />
+                        <circle
+                          cx="18" cy="18" r="16"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeDasharray={`${(lockCountdown / 5) * 100}, 100`}
+                          strokeLinecap="round"
+                          className="text-gold transition-all duration-100"
+                        />
+                      </svg>
+                      <span className="absolute inset-0 flex items-center justify-center font-display text-2xl text-gold">
+                        {lockCountdown}
+                      </span>
+                    </div>
+                    <span className="text-ash text-sm">blocks until RNG anchor</span>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -551,7 +624,9 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {Array.from({ length: room.maxPlayers }).map((_, i) => {
-                const seat = room.seats[i]
+                // Find seat by its logical index (stable after shuffle)
+                // The array order changes during shuffle but seat.index stays the same
+                const seat = room.seats.find(s => s.index === i)
                 const status = getSeatStatus(seat, room.state)
                 const isYou = seat?.walletAddress === address
 

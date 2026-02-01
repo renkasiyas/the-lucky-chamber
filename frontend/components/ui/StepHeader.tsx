@@ -29,7 +29,6 @@ export function StepHeader({ currentStep, className = '' }: StepHeaderProps) {
         {steps.map((step, index) => {
           const isCompleted = step.id < currentStep
           const isCurrent = step.id === currentStep
-          const isUpcoming = step.id > currentStep
 
           return (
             <li

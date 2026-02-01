@@ -4,6 +4,7 @@
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
 
+import { SOMPI_PER_KAS } from '../../../../shared/index.js'
 import { store } from '../../db/store.js'
 import { walletManager } from '../wallet.js'
 import { kaspaClient } from '../kaspa-client.js'
@@ -15,6 +16,7 @@ const kaspaWasm = require('kaspa-wasm') as any
 export class PayoutService {
   /**
    * Send payout transaction to survivors
+   * Gathers UTXOs from all seat deposit addresses since deposits go to per-seat addresses
    */
   async sendPayout(roomId: string): Promise<string> {
     const room = store.getRoom(roomId)
@@ -25,62 +27,77 @@ export class PayoutService {
 
     logger.info('Building payout transaction', { roomId, payoutCount: payouts.length })
 
-    // Get UTXOs from room's single deposit address
-    const { utxos } = await kaspaClient.getUtxosByAddress(room.depositAddress)
-    if (utxos.length === 0) {
-      throw new Error('No UTXOs found in room deposit address')
+    // Gather UTXOs from ALL seat deposit addresses (deposits go to per-seat addresses)
+    const allEntries: any[] = []
+    const allPrivateKeys: any[] = []
+    let totalSompi = 0n
+
+    for (const seat of room.seats) {
+      const { utxos } = await kaspaClient.getUtxosByAddress(seat.depositAddress)
+      if (utxos.length === 0) continue
+
+      const seatKeypair = walletManager.deriveSeatKeypair(roomId, seat.index)
+      const seatAddress = new kaspaWasm.Address(seat.depositAddress)
+
+      for (const utxo of utxos) {
+        allEntries.push({
+          address: seatAddress,
+          outpoint: utxo.outpoint,
+          scriptPublicKey: kaspaWasm.payToAddressScript(seatAddress),
+          amount: BigInt(utxo.amount),
+          isCoinbase: utxo.isCoinbase || false,
+          blockDaaScore: BigInt(utxo.blockDaaScore || 0)
+        })
+        totalSompi += BigInt(utxo.amount)
+      }
+
+      allPrivateKeys.push(seatKeypair.privateKey)
+
+      logger.debug('Collected UTXOs from seat', {
+        seatIndex: seat.index,
+        utxoCount: utxos.length,
+        depositAddress: seat.depositAddress
+      })
     }
 
-    // Get the single room private key
-    const roomKeypair = walletManager.deriveRoomKeypair(roomId)
+    if (allEntries.length === 0) {
+      throw new Error('No UTXOs found in any seat deposit addresses')
+    }
 
-    logger.info('Collected UTXOs from room', {
-      utxoCount: utxos.length,
-      totalSompi: utxos.reduce((sum: bigint, u: any) => sum + u.amount, 0n).toString(),
-      depositAddress: room.depositAddress
+    logger.info('Collected UTXOs from all seats', {
+      totalUtxos: allEntries.length,
+      totalSompi: totalSompi.toString(),
+      seatsWithUtxos: allPrivateKeys.length
     })
 
-    // Build transaction outputs
+    // Build transaction outputs (convert KAS to sompi)
     const outputs = payouts.map(payout => ({
       address: payout.address,
-      amount: BigInt(Math.floor(payout.amount * 100_000_000))
+      amount: BigInt(Math.floor(payout.amount * SOMPI_PER_KAS))
     }))
 
     for (const payout of payouts) {
       logger.info('Adding payout output', { address: payout.address, amount: payout.amount })
     }
 
-    // Build the transaction
-    const roomAddress = new kaspaWasm.Address(roomKeypair.address)
-
-    const entries = utxos.map((utxo: any) => ({
-      address: roomAddress,
-      outpoint: utxo.outpoint,
-      scriptPublicKey: kaspaWasm.payToAddressScript(roomAddress),
-      amount: BigInt(utxo.amount),
-      isCoinbase: utxo.isCoinbase || false,
-      blockDaaScore: BigInt(utxo.blockDaaScore || 0)
-    }))
-
     logger.info('Creating payout transaction', {
-      inputCount: entries.length,
-      outputCount: outputs.length,
-      roomAddress: roomAddress.toString()
+      inputCount: allEntries.length,
+      outputCount: outputs.length
     })
 
-    // Change (house cut) goes to treasury, or room address if treasury is on wrong network
-    let treasuryAddress: any
+    // Change (house cut) goes to treasury, or first seat address if treasury is on wrong network
+    let changeAddress: any
     try {
-      treasuryAddress = new kaspaWasm.Address(config.treasuryAddress)
+      changeAddress = new kaspaWasm.Address(config.treasuryAddress)
     } catch {
-      logger.warn('Treasury address invalid for current network, using room address for change')
-      treasuryAddress = roomAddress
+      logger.warn('Treasury address invalid for current network, using first seat address for change')
+      changeAddress = new kaspaWasm.Address(room.seats[0].depositAddress)
     }
 
     const { transactions } = await kaspaWasm.createTransactions({
-      entries,
+      entries: allEntries,
       outputs,
-      changeAddress: treasuryAddress,
+      changeAddress,
       priorityFee: 1000n,
       networkId: config.network
     })
@@ -91,8 +108,8 @@ export class PayoutService {
 
     const tx = transactions[0]
 
-    // Sign with room's single private key
-    await tx.sign([roomKeypair.privateKey])
+    // Sign with all seat private keys (kaspa-wasm matches keys to inputs by public key)
+    await tx.sign(allPrivateKeys)
 
     // Submit to network
     logger.info('Submitting payout transaction to network')
@@ -105,6 +122,7 @@ export class PayoutService {
 
   /**
    * Send refund transactions for aborted rooms
+   * Gathers UTXOs from all seat deposit addresses since deposits go to per-seat addresses
    */
   async sendRefunds(roomId: string): Promise<string[]> {
     const room = store.getRoom(roomId)
@@ -112,15 +130,43 @@ export class PayoutService {
 
     logger.info('Processing refunds for aborted room', { roomId, totalSeats: room.seats.length })
 
-    // Get UTXOs from room's deposit address
-    const { utxos, totalAmount } = await kaspaClient.getUtxosByAddress(room.depositAddress)
-    if (utxos.length === 0) {
-      logger.warn('No UTXOs found for refunds', { roomId, depositAddress: room.depositAddress })
-      return []
+    // Gather UTXOs from ALL seat deposit addresses (deposits go to per-seat addresses)
+    const allEntries: any[] = []
+    const allPrivateKeys: any[] = []
+    let totalAmount = 0n
+
+    for (const seat of room.seats) {
+      const { utxos } = await kaspaClient.getUtxosByAddress(seat.depositAddress)
+      if (utxos.length === 0) continue
+
+      const seatKeypair = walletManager.deriveSeatKeypair(roomId, seat.index)
+      const seatAddress = new kaspaWasm.Address(seat.depositAddress)
+
+      for (const utxo of utxos) {
+        allEntries.push({
+          address: seatAddress,
+          outpoint: utxo.outpoint,
+          scriptPublicKey: kaspaWasm.payToAddressScript(seatAddress),
+          amount: BigInt(utxo.amount),
+          isCoinbase: utxo.isCoinbase || false,
+          blockDaaScore: BigInt(utxo.blockDaaScore || 0)
+        })
+        totalAmount += BigInt(utxo.amount)
+      }
+
+      allPrivateKeys.push(seatKeypair.privateKey)
+
+      logger.debug('Collected UTXOs from seat for refund', {
+        seatIndex: seat.index,
+        utxoCount: utxos.length,
+        depositAddress: seat.depositAddress
+      })
     }
 
-    // Get room keypair
-    const roomKeypair = walletManager.deriveRoomKeypair(roomId)
+    if (allEntries.length === 0) {
+      logger.warn('No UTXOs found for refunds in any seat addresses', { roomId })
+      return []
+    }
 
     // Only refund seats that actually deposited (confirmed = deposit received)
     // Players who joined but didn't deposit shouldn't get a share of the pot
@@ -135,7 +181,8 @@ export class PayoutService {
       totalSeats: room.seats.length,
       joinedSeats: room.seats.filter(s => s.walletAddress).length,
       confirmedSeats: confirmedSeats.length,
-      totalAmountSompi: totalAmount.toString()
+      totalAmountSompi: totalAmount.toString(),
+      seatsWithUtxos: allPrivateKeys.length
     })
 
     // Calculate refund amounts - subtract fees from total and split evenly among all players
@@ -160,33 +207,26 @@ export class PayoutService {
         seatIndex: seat.index,
         address: seat.walletAddress,
         amountSompi: refundPerSeat.toString(),
-        amountKAS: Number(refundPerSeat) / 100_000_000
+        amountKAS: Number(refundPerSeat) / SOMPI_PER_KAS
       })
     }
 
-    // Build single refund transaction
-    const roomAddress = new kaspaWasm.Address(room.depositAddress)
-    const entries = utxos.map((utxo: any) => ({
-      address: roomAddress,
-      outpoint: utxo.outpoint,
-      scriptPublicKey: kaspaWasm.payToAddressScript(roomAddress),
-      amount: BigInt(utxo.amount),
-      isCoinbase: utxo.isCoinbase || false,
-      blockDaaScore: BigInt(utxo.blockDaaScore || 0)
-    }))
+    logger.info('Creating refund transaction', {
+      inputCount: allEntries.length,
+      outputCount: outputs.length
+    })
 
-    // Any change (dust from fees) goes to treasury or room address if treasury is on wrong network
+    // Any change (dust from fees) goes to treasury or first seat address if treasury is on wrong network
     let changeAddress: any
     try {
       changeAddress = new kaspaWasm.Address(config.treasuryAddress)
     } catch {
-      // Treasury address might be on different network, use room address instead
-      logger.warn('Treasury address invalid for current network, using room address for change')
-      changeAddress = roomAddress
+      logger.warn('Treasury address invalid for current network, using first seat address for change')
+      changeAddress = new kaspaWasm.Address(room.seats[0].depositAddress)
     }
 
     const { transactions } = await kaspaWasm.createTransactions({
-      entries,
+      entries: allEntries,
       outputs,
       changeAddress,
       priorityFee: 1000n,
@@ -198,7 +238,9 @@ export class PayoutService {
     }
 
     const tx = transactions[0]
-    await tx.sign([roomKeypair.privateKey])
+
+    // Sign with all seat private keys (kaspa-wasm matches keys to inputs by public key)
+    await tx.sign(allPrivateKeys)
 
     const txId = await kaspaClient.submitTransaction(tx)
     logger.info('Refund transaction submitted', { roomId, txId, refundCount: outputs.length })

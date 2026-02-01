@@ -38,7 +38,16 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const connect = useCallback(async () => {
-    const kasware = getKasware()
+    // Wait for wallet extension to be available (may be injected async)
+    let kasware = getKasware()
+    if (!kasware) {
+      // Retry a few times with delay
+      for (let i = 0; i < 5 && !kasware; i++) {
+        await new Promise(resolve => setTimeout(resolve, 200))
+        kasware = getKasware()
+      }
+    }
+
     if (!kasware) {
       setError('No compatible wallet found. Install Kasware or Kasanova.')
       return
@@ -162,10 +171,22 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
     }
   }, [getKasware, disconnect, refreshBalance])
 
-  // Check initial wallet state
+  // Check initial wallet state - with retry for async extension injection
   useEffect(() => {
+    let attempts = 0
+    const maxAttempts = 10
+    const retryDelay = 200 // ms
+
     const checkInitialState = async () => {
       const kasware = getKasware()
+
+      // Retry if wallet not found yet (extension may inject asynchronously)
+      if (!kasware && attempts < maxAttempts) {
+        attempts++
+        setTimeout(checkInitialState, retryDelay)
+        return
+      }
+
       if (!kasware) {
         setInitializing(false)
         return

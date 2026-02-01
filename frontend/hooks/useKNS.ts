@@ -4,6 +4,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import config from '../lib/config'
 
 interface UseKNSReturn {
   domain: string | null
@@ -38,8 +39,7 @@ export function useKNS(address: string | null): UseKNSReturn {
     setError(null)
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4001'
-      const response = await fetch(`${apiUrl}/api/kns/${address}`)
+      const response = await fetch(`${config.api.baseUrl}/api/kns/${address}`)
 
       if (!response.ok) {
         throw new Error('Failed to fetch KNS domain')

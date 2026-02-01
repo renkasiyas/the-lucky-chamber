@@ -225,6 +225,15 @@ body::before {
   50% { opacity: 1; }
 }
 
+@keyframes pot-fill-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(34, 197, 94, 0.3); }
+  50% { box-shadow: 0 0 12px rgba(34, 197, 94, 0.6); }
+}
+
+.animate-pot-fill {
+  animation: pot-fill-pulse 1.5s ease-in-out infinite;
+}
+
 .animate-pulse-gold { animation: pulse-gold var(--anim-pulse-gold) ease-in-out infinite; }
 .animate-pulse-blood { animation: pulse-blood var(--anim-pulse-blood) ease-in-out infinite; }
 .animate-spin-chamber { animation: spin-chamber var(--anim-spin-chamber) var(--easing-default); }

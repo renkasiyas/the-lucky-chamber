@@ -53,9 +53,9 @@ class Store {
       INSERT INTO rooms (
         id, mode, state, seat_price, max_players, min_players, house_cut_percent,
         deposit_address, server_commit, server_seed, lock_height, settlement_block_height,
-        payout_tx_id, created_at, expires_at, updated_at
+        payout_tx_id, current_turn_seat_index, created_at, expires_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const insertSeat = db.prepare(`
@@ -81,6 +81,7 @@ class Store {
         room.lockHeight || null,
         room.settlementBlockHeight || null,
         room.payoutTxId || null,
+        room.currentTurnSeatIndex ?? null,
         room.createdAt,
         room.expiresAt,
         now
@@ -137,6 +138,10 @@ class Store {
     if (updates.refundTxIds !== undefined) {
       fields.push('refund_tx_ids = ?')
       values.push(updates.refundTxIds ? JSON.stringify(updates.refundTxIds) : null)
+    }
+    if (updates.currentTurnSeatIndex !== undefined) {
+      fields.push('current_turn_seat_index = ?')
+      values.push(updates.currentTurnSeatIndex)
     }
 
     if (fields.length === 0) return
@@ -351,7 +356,9 @@ class Store {
       settlementBlockHeight: roomRow.settlement_block_height || null,
       payoutTxId: roomRow.payout_tx_id || null,
       refundTxIds: roomRow.refund_tx_ids ? JSON.parse(roomRow.refund_tx_ids) : undefined,
+      currentTurnSeatIndex: roomRow.current_turn_seat_index ?? null,
       createdAt: roomRow.created_at,
+      updatedAt: roomRow.updated_at,
       expiresAt: roomRow.expires_at,
       seats: seatRows.map(seat => ({
         index: seat.seat_index,

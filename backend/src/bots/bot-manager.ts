@@ -62,11 +62,6 @@ export class BotManager {
    * Start bot manager
    */
   start(): void {
-    if (!this.enabled) {
-      logger.info('Bot manager disabled')
-      return
-    }
-
     this.enabled = true
     logger.info('Bot manager started', { network: this.network, botCount: this.botAddresses.length })
   }
@@ -113,10 +108,11 @@ export class BotManager {
     const room = roomManager.getRoom(roomId)
     if (!room) return
 
+    // Track bot seats by their stable seat.index (not array position)
     const botSeatIndices = new Set<number>()
-    room.seats.forEach((seat, index) => {
+    room.seats.forEach((seat) => {
       if (seat.walletAddress && this.isBot(seat.walletAddress)) {
-        botSeatIndices.add(index)
+        botSeatIndices.add(seat.index)
       }
     })
 
@@ -154,13 +150,13 @@ export class BotManager {
 
     logger.info('Starting bot deposits', {
       roomId,
-      depositAddress: room.depositAddress,
       seatPrice: room.seatPrice,
       botSeatCount: botSeatIndices.size
     })
 
     for (const seatIndex of botSeatIndices) {
-      const seat = room.seats[seatIndex]
+      // Use .find() since seatIndex is the stable seat.index, not array position
+      const seat = room.seats.find(s => s.index === seatIndex)
       if (seat && !seat.confirmed && seat.walletAddress) {
         try {
           // Find which bot this is
@@ -171,7 +167,9 @@ export class BotManager {
           }
 
           const botId = BOT_IDS[botIndex]
-          const txId = await this.sendBotDeposit(botId, seat.walletAddress, room.depositAddress, room.seatPrice)
+          // Send to seat's unique deposit address, not room-level address
+          // The deposit monitor watches per-seat addresses to confirm deposits
+          const txId = await this.sendBotDeposit(botId, seat.walletAddress, seat.depositAddress, room.seatPrice)
           logger.info('Bot deposit sent successfully', { roomId, seatIndex, botId, txId })
         } catch (err: any) {
           logger.error('Failed to send bot deposit', {

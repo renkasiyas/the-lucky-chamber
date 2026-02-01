@@ -14,6 +14,7 @@ describe('Store', () => {
     minPlayers: 2,
     state: RoomState.LOBBY,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     expiresAt: Date.now() + 300000,
     depositAddress: 'kaspatest:addr123',
     lockHeight: null,
@@ -22,6 +23,7 @@ describe('Store', () => {
     serverSeed: null,
     houseCutPercent: 5,
     payoutTxId: null,
+      currentTurnSeatIndex: null,
     seats: [],
     rounds: [],
   })

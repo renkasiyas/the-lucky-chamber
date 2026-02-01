@@ -54,6 +54,7 @@ describe('API Routes', () => {
     minPlayers: 2,
     state: RoomState.LOBBY,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     expiresAt: Date.now() + 300000,
     depositAddress: 'kaspatest:deposit123',
     lockHeight: null,
@@ -62,6 +63,7 @@ describe('API Routes', () => {
     serverSeed: null,
     houseCutPercent: 5,
     payoutTxId: null,
+      currentTurnSeatIndex: null,
     seats: [],
     rounds: [],
     ...overrides,
@@ -102,7 +104,7 @@ describe('API Routes', () => {
 
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: GameMode.EXTREME })
+        .send({ mode: GameMode.EXTREME, seatPrice: 10 })
 
       expect(res.status).toBe(200)
       expect(res.body.room.mode).toBe(GameMode.EXTREME)
@@ -111,25 +113,49 @@ describe('API Routes', () => {
     it('should return 400 for invalid game mode', async () => {
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: 'INVALID' })
+        .send({ mode: 'INVALID', seatPrice: 10 })
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toBe('Invalid game mode')
+      expect(res.body.error).toContain('REGULAR')
     })
 
     it('should return 400 for missing game mode', async () => {
       const res = await request(app)
         .post('/api/rooms')
-        .send({})
+        .send({ seatPrice: 10 })
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toBe('Invalid game mode')
+      expect(res.body.error).toContain('mode')
+    })
+
+    it('should return 400 for missing seatPrice', async () => {
+      const res = await request(app)
+        .post('/api/rooms')
+        .send({ mode: GameMode.REGULAR })
+
+      expect(res.status).toBe(400)
+      expect(res.body.error).toContain('seatPrice')
+    })
+
+    it('should return 400 for seatPrice below minimum', async () => {
+      const res = await request(app)
+        .post('/api/rooms')
+        .send({ mode: GameMode.REGULAR, seatPrice: 0 })
+
+      expect(res.status).toBe(400)
+    })
+
+    it('should return 400 for seatPrice above maximum', async () => {
+      const res = await request(app)
+        .post('/api/rooms')
+        .send({ mode: GameMode.REGULAR, seatPrice: 10000 })
+
+      expect(res.status).toBe(400)
+      expect(res.body.error).toContain('Seat price must be between')
     })
 
     it('should return 500 on room creation error', async () => {
-      vi.mocked(roomManager.createRoom).mockImplementation(() => {
-        throw new Error('Creation failed')
-      })
+      vi.mocked(roomManager.createRoom).mockRejectedValue(new Error('Creation failed'))
 
       const res = await request(app)
         .post('/api/rooms')
