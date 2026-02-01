@@ -200,9 +200,13 @@ export class RoomManager {
 
     const seatIndex = room.seats.length
 
+    // Derive unique deposit address for this seat (zero-ambiguity deposit matching)
+    const depositAddress = walletManager.deriveSeatAddress(roomId, seatIndex)
+
     const seat: Seat = {
       index: seatIndex,
       walletAddress,
+      depositAddress,
       depositTxId: null,
       amount: 0,
       confirmed: false,
@@ -212,21 +216,20 @@ export class RoomManager {
       avatarUrl: null,
     }
 
-    room.seats.push(seat)
+    // Add seat to database
+    store.addSeat(roomId, seat)
 
     // Transition to FUNDING if first player joined
     if (room.state === RoomState.LOBBY) {
-      room.state = RoomState.FUNDING
+      store.updateRoom(roomId, { state: RoomState.FUNDING })
     }
-
-    store.updateRoom(roomId, room)
     logUserAction('Player joined room', walletAddress, { roomId, seatIndex })
 
     // Fetch KNS profile asynchronously (don't block join)
     this.fetchKnsProfile(roomId, seatIndex, walletAddress)
 
-    // All players deposit to the same room address
-    return { seat, depositAddress: room.depositAddress }
+    // Each player deposits to their unique seat address
+    return { seat, depositAddress }
   }
 
   /**
@@ -285,9 +288,8 @@ export class RoomManager {
 
     if (room.state === RoomState.LOBBY) {
       // LOBBY: safe to just remove, no deposits yet
-      room.seats.splice(seatIndex, 1)
-      room.seats.forEach((s, i) => { s.index = i })
-      store.updateRoom(roomId, room)
+      store.deleteSeat(roomId, seatIndex)
+      store.reindexSeats(roomId)
       logUserAction('Player left room during LOBBY', walletAddress, { roomId })
       return
     }
@@ -306,8 +308,7 @@ export class RoomManager {
         // Already dead, nothing to do
         return
       }
-      seat.alive = false
-      store.updateRoom(roomId, room)
+      store.updateSeat(roomId, seatIndex, { alive: false })
       logUserAction('Player forfeited during game', walletAddress, { roomId, seatIndex })
 
       // Broadcast the forfeit
@@ -339,8 +340,24 @@ export class RoomManager {
     const room = store.getRoom(roomId)
     if (!room) throw new Error('Room not found')
 
+    // Only confirm deposits in FUNDING state
+    if (room.state !== RoomState.FUNDING) {
+      logger.warn('Cannot confirm deposit - room not in FUNDING state', {
+        roomId,
+        currentState: room.state,
+        seatIndex
+      })
+      return
+    }
+
     const seat = room.seats[seatIndex]
     if (!seat) throw new Error('Seat not found')
+
+    // Idempotent: skip if already confirmed (prevents race conditions)
+    if (seat.confirmed) {
+      logger.debug('Seat already confirmed, skipping', { roomId, seatIndex, existingTxId: seat.depositTxId })
+      return
+    }
 
     seat.depositTxId = txId
     seat.amount = amount
@@ -930,29 +947,42 @@ export class RoomManager {
 
   /**
    * Recover stale rooms on startup - abort and refund any rooms
-   * that were in FUNDING/LOBBY state when the server crashed
+   * that were incomplete when the server crashed
    */
   async recoverStaleRooms(): Promise<void> {
     const rooms = store.getAllRooms()
-    const staleStates: string[] = [RoomState.LOBBY, RoomState.FUNDING, RoomState.LOCKED]
+    // All non-terminal states need recovery
+    const staleStates: string[] = [RoomState.LOBBY, RoomState.FUNDING, RoomState.LOCKED, RoomState.PLAYING]
+
+    let recoveredCount = 0
+    let refundedCount = 0
 
     for (const room of rooms) {
       if (staleStates.includes(room.state)) {
+        const confirmedSeats = room.seats.filter(s => s.confirmed)
+
         logger.warn('Recovering stale room from previous session', {
           roomId: room.id,
           state: room.state,
           seatCount: room.seats.length,
-          confirmedSeats: room.seats.filter(s => s.confirmed).length
+          confirmedSeats: confirmedSeats.length,
+          roundsPlayed: room.rounds.length
         })
 
         // Abort and refund any deposits
-        await this.abortRoom(room.id)
+        if (confirmedSeats.length > 0) {
+          await this.abortRoom(room.id)
+          refundedCount++
+        } else {
+          // No deposits to refund, just mark as aborted
+          store.updateRoom(room.id, { state: RoomState.ABORTED })
+        }
+        recoveredCount++
       }
     }
 
-    const recoveredCount = rooms.filter(r => staleStates.includes(r.state)).length
     if (recoveredCount > 0) {
-      logger.info(`Recovered ${recoveredCount} stale room(s)`)
+      logger.info(`Recovered ${recoveredCount} stale room(s), refunded ${refundedCount}`)
     } else {
       logger.info('No stale rooms to recover')
     }

@@ -3,9 +3,10 @@
 
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Room } from '../../../shared/index'
+import { useSound } from '../../hooks/useSound'
 
 interface ChamberGameProps {
   room: Room
@@ -28,7 +29,9 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
   const [countdown, setCountdown] = useState(30)
   const [justDiedSeatIndex, setJustDiedSeatIndex] = useState<number | null>(null)
   const [turnCheckTrigger, setTurnCheckTrigger] = useState(0)
-  const lastProcessedRound = useRef<number>(-1)
+  const initialRoundIndex = room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1
+  const lastProcessedRound = useRef<number>(initialRoundIndex)
+  const { play: playSound, stop: stopSound } = useSound()
 
   // Determine whose turn it is - SIMPLIFIED LOGIC
   // Calculate locally based on room state - this is deterministic and always works
@@ -38,13 +41,13 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
   const currentShooterIndex = currentShooter?.index ?? -1
 
   // Check if it's my turn - compare wallet addresses directly
-  // Use WebSocket info if available, otherwise use calculated shooter
-  const effectiveTurnWallet = currentTurnWallet || currentShooter?.walletAddress || null
+  // Prioritize local calculation (deterministic), WebSocket is backup confirmation
+  const localTurnWallet = currentShooter?.walletAddress || null
   const isMyTurn = !!(
     room.state === 'PLAYING' &&
     myAddress &&
-    effectiveTurnWallet &&
-    effectiveTurnWallet === myAddress
+    localTurnWallet &&
+    localTurnWallet === myAddress
   )
 
 
@@ -57,6 +60,17 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
   // My seat info (needed for result handling)
   const mySeat = room.seats.find(s => s.walletAddress === myAddress)
   const amIDead = mySeat && !mySeat.alive
+
+  // Memoize particle positions to prevent jumps on re-render
+  const particlePositions = useMemo(() =>
+    [...Array(6)].map((_, i) => ({
+      left: 20 + Math.random() * 60,
+      top: 20 + Math.random() * 60,
+      duration: 3 + i * 0.5,
+      delay: i * 0.8,
+      xOffset: i % 2 ? 10 : -10,
+    })), []
+  )
 
   // Handle round results - with drama for spectators too
   useEffect(() => {
@@ -76,29 +90,37 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
         // Spectator experience: show spinning animation first
         setPhase('pulling')
         setHammerCocked(true)
+        playSound('cock')
         setSpinOffset(prev => prev + 720 + Math.random() * 360) // Spin the barrel!
+        const spinSoundTimer = setTimeout(() => playSound('cylinder-spin'), 150)
 
-        // After spin, show tension dots
+        // After spin, show tension dots with heartbeat
+        // cylinder-spin is 3.3s, start heartbeat as spin winds down
         const tensionTimer = setTimeout(() => {
           setPhase('revealing')
-        }, 800)
+          playSound('heartbeat', { loop: true, volume: 0.6 })
+        }, 2800)
 
-        // Then show result
+        // Then show result - give heartbeat ~2s of dramatic tension
         const resultTimer = setTimeout(() => {
+          stopSound('heartbeat')
           setResult(latestRound.died ? 'bang' : 'click')
           setPhase('result')
 
           if (latestRound.died) {
+            playSound('eliminated')
             setJustDiedSeatIndex(latestRound.shooterSeatIndex)
             setShowFlash(true)
             setTimeout(() => setShowFlash(false), 200)
           } else {
+            playSound('empty-click')
             setShowSurvivalFlash(true)
             setTimeout(() => setShowSurvivalFlash(false), 300)
           }
-        }, 1500)
+        }, 4800)
 
         // After showing result, transition to next turn
+        // eliminated is 3s, empty-click is 2s - wait for sounds to finish
         const nextTurnTimer = setTimeout(() => {
           setResult(null)
           setJustDiedSeatIndex(null)
@@ -106,28 +128,35 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
           setCountdown(30)
           setPhase('waiting')
           setTurnCheckTrigger(prev => prev + 1)
-        }, latestRound.died ? 4000 : 3300)
+          playSound('reload')
+        }, latestRound.died ? 8000 : 7000)
 
         return () => {
+          clearTimeout(spinSoundTimer)
           clearTimeout(tensionTimer)
           clearTimeout(resultTimer)
           clearTimeout(nextTurnTimer)
+          stopSound('heartbeat')
         }
       } else {
         // It was our turn - we already saw the spinning, just show result
+        stopSound('heartbeat')
         setResult(latestRound.died ? 'bang' : 'click')
         setPhase('result')
 
         if (latestRound.died) {
+          playSound('eliminated')
           setJustDiedSeatIndex(latestRound.shooterSeatIndex)
           setShowFlash(true)
           setTimeout(() => setShowFlash(false), 200)
         } else {
+          playSound('empty-click')
           setShowSurvivalFlash(true)
           setTimeout(() => setShowSurvivalFlash(false), 300)
         }
 
         // After showing result, transition to next turn
+        // Wait for eliminated (3s) or empty-click (2s) to finish
         const timer = setTimeout(() => {
           setResult(null)
           setJustDiedSeatIndex(null)
@@ -135,12 +164,16 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
           setCountdown(30)
           setPhase('waiting')
           setTurnCheckTrigger(prev => prev + 1)
-        }, latestRound.died ? 2500 : 1800)
+          playSound('reload')
+        }, latestRound.died ? 3500 : 2500)
 
-        return () => clearTimeout(timer)
+        return () => {
+          clearTimeout(timer)
+          stopSound('heartbeat')
+        }
       }
     }
-  }, [room.state, latestRound?.index, latestRound?.died, mySeat?.index])
+  }, [room.state, latestRound?.index, latestRound?.died, latestRound?.shooterSeatIndex, mySeat?.index, playSound, stopSound])
 
   // Separate effect for turn detection - runs when turn changes
   // Does NOT depend on phase to avoid race condition
@@ -163,29 +196,41 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
     setCountdown(30)
   }, [room.state, isMyTurn, currentRound, currentTurnWallet, turnCheckTrigger])
 
-  // Countdown timer
+  // Countdown timer with tick sound for final 10 seconds
   useEffect(() => {
     if (phase !== 'your_turn' && phase !== 'waiting') return
     if (room.state !== 'PLAYING') return
 
     const timer = setInterval(() => {
-      setCountdown(prev => (prev <= 1 ? 0 : prev - 1))
+      setCountdown(prev => {
+        const next = prev <= 1 ? 0 : prev - 1
+        if (next <= 10 && next > 0 && phase === 'your_turn') {
+          playSound('countdown', { volume: 0.4 })
+        }
+        return next
+      })
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [phase, room.state])
+  }, [phase, room.state, playSound])
 
   const handlePullTrigger = useCallback(() => {
     if (phase !== 'your_turn') return
 
     setPhase('pulling')
     setHammerCocked(true)
+    playSound('cock')
     setSpinOffset(prev => prev + 720 + Math.random() * 360)
+    setTimeout(() => playSound('cylinder-spin'), 150)
 
     onPullTrigger?.()
 
-    setTimeout(() => setPhase('revealing'), 1500)
-  }, [phase, onPullTrigger])
+    // cylinder-spin is 3.3s, start heartbeat as spin winds down
+    setTimeout(() => {
+      setPhase('revealing')
+      playSound('heartbeat', { loop: true, volume: 0.6 })
+    }, 2800)
+  }, [phase, onPullTrigger, playSound])
 
   return (
     <div className={`relative w-full max-w-xl mx-auto ${amIDead ? 'chamber-dead' : ''}`}>
@@ -270,24 +315,24 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
         <div className="relative aspect-square max-w-sm mx-auto mt-8">
           {/* Ambient floating particles */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-full">
-            {[...Array(6)].map((_, i) => (
+            {particlePositions.map((particle, i) => (
               <motion.div
                 key={i}
                 className="absolute w-1 h-1 rounded-full bg-gold/30"
                 style={{
-                  left: `${20 + Math.random() * 60}%`,
-                  top: `${20 + Math.random() * 60}%`,
+                  left: `${particle.left}%`,
+                  top: `${particle.top}%`,
                 }}
                 animate={{
                   y: [0, -20, 0],
-                  x: [0, (i % 2 ? 10 : -10), 0],
+                  x: [0, particle.xOffset, 0],
                   opacity: [0, 0.6, 0],
                   scale: [0.5, 1, 0.5],
                 }}
                 transition={{
                   repeat: Infinity,
-                  duration: 3 + i * 0.5,
-                  delay: i * 0.8,
+                  duration: particle.duration,
+                  delay: particle.delay,
                   ease: 'easeInOut',
                 }}
               />
@@ -369,15 +414,9 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                   >
                     {isDead ? (
                       <motion.div
-                        initial={{ scale: 0, rotate: -180 }}
-                        animate={{ scale: 1, rotate: -cylinderRotation }}
-                        transition={{
-                          scale: { duration: 0.3 },
-                          rotate: {
-                            duration: phase === 'pulling' ? 1.5 : 0.8,
-                            ease: phase === 'pulling' ? [0.16, 1, 0.3, 1] : 'easeOut'
-                          }
-                        }}
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ duration: 0.3 }}
                         className="text-blood-light"
                       >
                         <svg className="w-7 h-7 drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]" fill="currentColor" viewBox="0 0 20 20">
@@ -385,16 +424,9 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                         </svg>
                       </motion.div>
                     ) : (
-                      <motion.span
-                        className={`text-sm font-mono font-bold ${isMe ? 'text-gold' : isCurrentShooter ? 'text-chalk' : 'text-ash/70'}`}
-                        animate={{ rotate: -cylinderRotation }}
-                        transition={{
-                          duration: phase === 'pulling' ? 1.5 : 0.8,
-                          ease: phase === 'pulling' ? [0.16, 1, 0.3, 1] : 'easeOut'
-                        }}
-                      >
+                      <span className={`text-sm font-mono font-bold ${isMe ? 'text-gold' : isCurrentShooter ? 'text-chalk' : 'text-ash/70'}`}>
                         {i + 1}
-                      </motion.span>
+                      </span>
                     )}
                   </div>
                 </motion.div>
@@ -427,18 +459,18 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
               {/* Arrow point */}
               <div className="w-0 h-0 mx-auto border-l-[16px] border-l-transparent border-r-[16px] border-r-transparent border-t-[20px] border-t-gold-dark drop-shadow-lg" />
             </motion.div>
-
-            {/* Fire label */}
-            <motion.div
-              className="mt-2 text-center"
-              animate={phase === 'your_turn' ? { opacity: [1, 0.3, 1] } : { opacity: 0.5 }}
-              transition={{ repeat: Infinity, duration: 0.6 }}
-            >
-              <span className="text-[10px] font-mono text-gold uppercase tracking-[0.3em] drop-shadow-[0_0_10px_rgba(212,175,55,0.5)]">
-                Fire
-              </span>
-            </motion.div>
           </div>
+
+          {/* Fire label - positioned separately below the pin */}
+          <motion.div
+            className="absolute top-[72px] left-1/2 -translate-x-1/2 z-10 text-center"
+            animate={phase === 'your_turn' ? { opacity: [1, 0.3, 1] } : { opacity: 0.5 }}
+            transition={{ repeat: Infinity, duration: 0.6 }}
+          >
+            <span className="text-[10px] font-mono text-gold uppercase tracking-[0.3em] drop-shadow-[0_0_10px_rgba(212,175,55,0.5)]">
+              Fire
+            </span>
+          </motion.div>
         </div>
 
         {/* Game Status & Controls */}

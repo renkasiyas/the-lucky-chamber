@@ -75,6 +75,66 @@ class WalletManager {
   }
 
   /**
+   * Derive a unique deposit address for a specific seat in a room
+   * Uses BIP44-like path: m/44'/111111'/0'/roomIndex/seatIndex
+   * This provides zero-ambiguity deposit matching per Kaspa UTXO model
+   */
+  deriveSeatAddress(roomId: string, seatIndex: number): string {
+    if (!this.xprv) {
+      throw new Error('Wallet not initialized')
+    }
+
+    // Use room ID to derive a deterministic room index
+    const hash = crypto.createHash('sha256').update(roomId).digest()
+    const roomIndex = hash.readUInt32BE(0) % 0x80000000
+
+    // Derive child key: m/44'/111111'/0'/roomIndex/seatIndex
+    const derivedXprv = this.xprv
+      .deriveChild(44, true)           // purpose
+      .deriveChild(111111, true)       // Kaspa coin type
+      .deriveChild(0, true)            // account
+      .deriveChild(roomIndex, false)   // room-specific derivation
+      .deriveChild(seatIndex, false)   // seat-specific derivation
+
+    // Get private key and derive address
+    const privateKey = derivedXprv.toPrivateKey()
+    const address = privateKey.toAddress(this.networkId)
+
+    return address.toString()
+  }
+
+  /**
+   * Derive keypair for a specific seat (for signing transactions from seat deposits)
+   */
+  deriveSeatKeypair(roomId: string, seatIndex: number): { privateKey: any; publicKey: any; address: string } {
+    if (!this.xprv) {
+      throw new Error('Wallet not initialized')
+    }
+
+    // Use room ID to derive a deterministic room index
+    const hash = crypto.createHash('sha256').update(roomId).digest()
+    const roomIndex = hash.readUInt32BE(0) % 0x80000000
+
+    // Derive child key
+    const derivedXprv = this.xprv
+      .deriveChild(44, true)
+      .deriveChild(111111, true)
+      .deriveChild(0, true)
+      .deriveChild(roomIndex, false)
+      .deriveChild(seatIndex, false)
+
+    const privateKey = derivedXprv.toPrivateKey()
+    const publicKey = privateKey.toPublicKey()
+    const address = privateKey.toAddress(this.networkId)
+
+    return {
+      privateKey,
+      publicKey,
+      address: address.toString()
+    }
+  }
+
+  /**
    * Derive a keypair for a room (for signing transactions)
    */
   deriveRoomKeypair(roomId: string): { privateKey: any; publicKey: any; address: string } {

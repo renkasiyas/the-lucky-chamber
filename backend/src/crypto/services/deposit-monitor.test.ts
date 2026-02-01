@@ -65,8 +65,8 @@ describe('DepositMonitor', () => {
     houseCutPercent: 5,
     payoutTxId: null,
     seats: [
-      { index: 0, walletAddress: 'kaspatest:wallet1', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-      { index: 1, walletAddress: 'kaspatest:wallet2', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
     ],
     rounds: [],
     ...overrides,
@@ -177,63 +177,75 @@ describe('DepositMonitor', () => {
 
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledWith(room.depositAddress)
+      // Should check each unconfirmed seat's deposit address
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledWith('kaspatest:seat0deposit')
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledWith('kaspatest:seat1deposit')
     })
 
     it('should confirm seats when sufficient deposits arrive', async () => {
       const room = createTestRoom()
       vi.mocked(store.getAllRooms).mockReturnValue([room])
       // 10 KAS = 10 * 100_000_000 sompi = 1_000_000_000n
-      vi.mocked(kaspaClient.getUtxosByAddress).mockResolvedValue({
-        utxos: [{ amount: 1000000000n, outpoint: { transactionId: 'tx1', index: 0 }, scriptPublicKey: null, blockDaaScore: 0n }],
-        totalAmount: 1000000000n,
-      })
+      // First seat gets deposit, second seat doesn't
+      vi.mocked(kaspaClient.getUtxosByAddress)
+        .mockResolvedValueOnce({
+          utxos: [{ outpoint: { transactionId: 'tx1', index: 0 }, amount: 1000000000n, address: '', scriptPublicKey: null, blockDaaScore: 0n }],
+          totalAmount: 1000000000n,
+        })
+        .mockResolvedValueOnce({
+          utxos: [],
+          totalAmount: 0n,
+        })
       monitor.setDepositConfirmer(mockConfirmer)
       monitor.start()
 
       await vi.advanceTimersByTimeAsync(0)
 
-      // Should confirm 1 seat (10 KAS / 10 KAS per seat = 1 seat)
+      // Should confirm seat 0 (has deposit at its address)
       expect(mockConfirmer.confirmDeposit).toHaveBeenCalledTimes(1)
       expect(mockConfirmer.confirmDeposit).toHaveBeenCalledWith(
         room.id,
         0,
-        expect.stringContaining('deposit_'),
-        room.seatPrice
+        'tx1',
+        10 // amount in KAS
       )
     })
 
     it('should confirm multiple seats with sufficient deposits', async () => {
       const room = createTestRoom()
       vi.mocked(store.getAllRooms).mockReturnValue([room])
-      // 20 KAS = enough for 2 seats
-      vi.mocked(kaspaClient.getUtxosByAddress).mockResolvedValue({
-        utxos: [],
-        totalAmount: 2000000000n,
-      })
+      // Both seats have received deposits at their respective addresses
+      vi.mocked(kaspaClient.getUtxosByAddress)
+        .mockResolvedValueOnce({
+          utxos: [{ outpoint: { transactionId: 'tx1', index: 0 }, amount: 1000000000n, address: '', scriptPublicKey: null, blockDaaScore: 0n }],
+          totalAmount: 1000000000n,
+        })
+        .mockResolvedValueOnce({
+          utxos: [{ outpoint: { transactionId: 'tx2', index: 0 }, amount: 1000000000n, address: '', scriptPublicKey: null, blockDaaScore: 0n }],
+          totalAmount: 1000000000n,
+        })
       monitor.setDepositConfirmer(mockConfirmer)
       monitor.start()
 
       await vi.advanceTimersByTimeAsync(0)
 
       expect(mockConfirmer.confirmDeposit).toHaveBeenCalledTimes(2)
+      expect(mockConfirmer.confirmDeposit).toHaveBeenCalledWith(room.id, 0, 'tx1', 10)
+      expect(mockConfirmer.confirmDeposit).toHaveBeenCalledWith(room.id, 1, 'tx2', 10)
     })
 
     it('should not confirm already confirmed seats', async () => {
       const room = createTestRoom()
       room.seats[0].confirmed = true
+      room.seats[1].confirmed = true
       vi.mocked(store.getAllRooms).mockReturnValue([room])
-      // 10 KAS = enough for 1 seat
-      vi.mocked(kaspaClient.getUtxosByAddress).mockResolvedValue({
-        utxos: [],
-        totalAmount: 1000000000n,
-      })
       monitor.setDepositConfirmer(mockConfirmer)
       monitor.start()
 
       await vi.advanceTimersByTimeAsync(0)
 
-      // Should not confirm the already confirmed seat
+      // Should not check any addresses since all seats confirmed
+      expect(kaspaClient.getUtxosByAddress).not.toHaveBeenCalled()
       expect(mockConfirmer.confirmDeposit).not.toHaveBeenCalled()
     })
 

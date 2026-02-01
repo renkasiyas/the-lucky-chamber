@@ -65,7 +65,8 @@ export class DepositMonitor {
   }
 
   /**
-   * Check for deposits on room addresses
+   * Check for deposits on seat-specific addresses
+   * Each seat has a unique deposit address for zero-ambiguity matching
    */
   private async checkDeposits(): Promise<void> {
     if (!this.depositConfirmer) {
@@ -87,88 +88,72 @@ export class DepositMonitor {
     for (const room of rooms) {
       if (room.state !== 'FUNDING') continue
 
-      const unconfirmedSeats = room.seats.filter(s => !s.confirmed)
+      const unconfirmedSeats = room.seats.filter(s => s.walletAddress && !s.confirmed)
       if (unconfirmedSeats.length === 0) continue
 
-      logger.info('Checking deposits for room', {
+      logger.debug('Checking deposits for room', {
         roomId: room.id,
-        depositAddress: room.depositAddress,
         seatCount: room.seats.length,
         unconfirmedCount: unconfirmedSeats.length,
         seatPrice: room.seatPrice
       })
 
-      const { totalAmount, error } = await this.getAddressBalance(room.depositAddress)
-
-      if (error) {
-        logger.error('Balance check failed for room', {
-          roomId: room.id,
-          error,
-          depositAddress: room.depositAddress,
-          hint: 'Check if Kaspa RPC is accessible'
-        })
-        continue
-      }
-
-      // Calculate deposits - each seat requires seatPrice KAS
       const seatPriceSompi = BigInt(Math.floor(room.seatPrice * 100_000_000))
-      const joinedCount = room.seats.filter(s => s.walletAddress).length
-      const confirmedCount = room.seats.filter(s => s.confirmed).length
-      const unconfirmedJoinedCount = room.seats.filter(s => s.walletAddress && !s.confirmed).length
-      const totalSeatsPayable = Number(totalAmount / seatPriceSompi)
 
-      logger.info('Deposit check result', {
-        roomId: room.id,
-        totalAmountSompi: totalAmount.toString(),
-        seatPriceSompi: seatPriceSompi.toString(),
-        joinedCount,
-        confirmedCount,
-        unconfirmedJoinedCount,
-        totalSeatsPayable
-      })
+      // Check each unconfirmed seat's unique deposit address
+      for (const seat of unconfirmedSeats) {
+        const { totalAmount, utxos, error } = await this.getAddressBalance(seat.depositAddress)
 
-      // Only confirm seats when we have EXACTLY as many new deposits as unconfirmed joined players
-      // This prevents confirming players who haven't deposited yet
-      // We wait for all joined players to deposit, then confirm them all at once
-      const newDepositsAvailable = totalSeatsPayable - confirmedCount
-
-      if (unconfirmedJoinedCount > 0 && newDepositsAvailable >= unconfirmedJoinedCount) {
-        // We have enough deposits for all unconfirmed players - confirm them all
-        for (const seat of room.seats) {
-          if (seat.walletAddress && !seat.confirmed) {
-            const txId = `deposit_${room.id}_${seat.index}`
-            this.depositConfirmer.confirmDeposit(room.id, seat.index, txId, room.seatPrice)
-          }
+        if (error) {
+          logger.error('Balance check failed for seat', {
+            roomId: room.id,
+            seatIndex: seat.index,
+            depositAddress: seat.depositAddress,
+            hint: 'Check if Kaspa RPC is accessible'
+          })
+          continue
         }
-        logger.info('All deposits confirmed for room', {
-          roomId: room.id,
-          newlyConfirmed: unconfirmedJoinedCount,
-          totalConfirmed: confirmedCount + unconfirmedJoinedCount,
-          totalSeats: room.seats.length
-        })
+
+        // Check if seat has received sufficient deposit
+        if (totalAmount >= seatPriceSompi) {
+          // Use the first UTXO's transaction ID as the deposit tx
+          const txId = utxos.length > 0 ? utxos[0].outpoint.transactionId : `deposit_${room.id}_${seat.index}`
+          const amountKas = Number(totalAmount) / 100_000_000
+
+          this.depositConfirmer.confirmDeposit(room.id, seat.index, txId, amountKas)
+
+          logger.info('Deposit confirmed for seat', {
+            roomId: room.id,
+            seatIndex: seat.index,
+            depositAddress: seat.depositAddress.slice(0, 20),
+            walletAddress: seat.walletAddress?.slice(0, 12),
+            amountSompi: totalAmount.toString(),
+            txId: txId.slice(0, 12)
+          })
+        }
       }
     }
   }
 
   /**
-   * Get total balance at an address
+   * Get total balance and UTXOs at an address
    */
-  private async getAddressBalance(address: string): Promise<{ totalAmount: bigint; error?: boolean }> {
+  private async getAddressBalance(address: string): Promise<{ totalAmount: bigint; utxos: Array<{ outpoint: { transactionId: string; index: number }; amount: bigint }>; error?: boolean }> {
     try {
       const { totalAmount, utxos } = await kaspaClient.getUtxosByAddress(address)
       logger.debug('Address balance check', {
-        address,
+        address: address.slice(0, 20),
         totalAmountSompi: totalAmount.toString(),
         utxoCount: utxos.length
       })
-      return { totalAmount }
+      return { totalAmount, utxos }
     } catch (error: any) {
       logger.error('Error checking address balance', {
         error: error?.message || error?.toString() || String(error),
         stack: error?.stack,
         address
       })
-      return { totalAmount: 0n, error: true }
+      return { totalAmount: 0n, utxos: [], error: true }
     }
   }
 }

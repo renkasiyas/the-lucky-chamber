@@ -1,5 +1,5 @@
 // ABOUTME: Dramatic game finished overlay with cinematic victory/defeat presentation
-// ABOUTME: Premium casino-style results screen with animated reveals and effects
+// ABOUTME: Premium results screen with animated reveals and effects
 
 'use client'
 
@@ -7,6 +7,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Room } from '../../../shared/index'
 import { formatKAS } from '../../lib/format'
+import { useSound } from '../../hooks/useSound'
 
 interface GameFinishedOverlayProps {
   room: Room
@@ -24,6 +25,7 @@ export function GameFinishedOverlay({
   onPlayAgain,
 }: GameFinishedOverlayProps) {
   const [phase, setPhase] = useState<'intro' | 'reveal' | 'results'>('intro')
+  const { play: playSound } = useSound()
 
   const survivors = room.seats.filter(s => s.alive)
   const eliminated = room.seats.filter(s => s.walletAddress && !s.alive)
@@ -49,10 +51,15 @@ export function GameFinishedOverlay({
   [])
 
   useEffect(() => {
-    const t1 = setTimeout(() => setPhase('reveal'), 800)
+    const t1 = setTimeout(() => {
+      setPhase('reveal')
+      if (iAmSurvivor) {
+        playSound('win')
+      }
+    }, 800)
     const t2 = setTimeout(() => setPhase('results'), 2000)
     return () => { clearTimeout(t1); clearTimeout(t2) }
-  }, [])
+  }, [iAmSurvivor, playSound])
 
   return (
     <motion.div

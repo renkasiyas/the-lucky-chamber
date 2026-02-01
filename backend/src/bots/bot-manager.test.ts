@@ -4,6 +4,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { BotManager } from './bot-manager.js'
 import { logger } from '../utils/logger.js'
+import { walletManager } from '../crypto/wallet.js'
+import { roomManager } from '../game/room-manager.js'
 
 // Mock logger
 vi.mock('../utils/logger.js', () => ({
@@ -12,6 +14,21 @@ vi.mock('../utils/logger.js', () => ({
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
+  },
+}))
+
+// Mock walletManager
+vi.mock('../crypto/wallet.js', () => ({
+  walletManager: {
+    deriveRoomAddress: vi.fn().mockReturnValue('kaspatest:mockaddr'),
+  },
+}))
+
+// Mock roomManager
+vi.mock('../game/room-manager.js', () => ({
+  roomManager: {
+    getRoom: vi.fn().mockReturnValue(null),
+    pullTrigger: vi.fn().mockReturnValue({ success: true }),
   },
 }))
 
@@ -44,7 +61,7 @@ describe('BotManager', () => {
     it('should create enabled bot manager when specified', () => {
       botManager = new BotManager('testnet-10', true)
       botManager.start()
-      expect(logger.info).toHaveBeenCalledWith('Bot manager started', { network: 'testnet-10' })
+      expect(logger.info).toHaveBeenCalledWith('Bot manager started', { network: 'testnet-10', botCount: 0 })
     })
   })
 
@@ -58,7 +75,7 @@ describe('BotManager', () => {
     it('should log started message when enabled', () => {
       botManager = new BotManager('mainnet', true)
       botManager.start()
-      expect(logger.info).toHaveBeenCalledWith('Bot manager started', { network: 'mainnet' })
+      expect(logger.info).toHaveBeenCalledWith('Bot manager started', { network: 'mainnet', botCount: 0 })
     })
   })
 
@@ -96,13 +113,22 @@ describe('BotManager', () => {
 
     it('should log when enabled', async () => {
       botManager = new BotManager('testnet-10', true)
+      // Mock roomManager.getRoom to return a room with no bot addresses
+      vi.mocked(roomManager.getRoom).mockReturnValue({
+        id: 'room-123',
+        seats: [
+          { walletAddress: 'wallet1' },
+          { walletAddress: 'wallet2' },
+        ],
+      } as any)
       vi.clearAllMocks()
 
       await botManager.handleRoomCreated('room-123', ['wallet1', 'wallet2'])
 
-      expect(logger.debug).toHaveBeenCalledWith('Bot manager: Room created', {
+      expect(logger.info).toHaveBeenCalledWith('Bot manager: Room created', {
         roomId: 'room-123',
         playerCount: 2,
+        botCount: 0,
       })
     })
   })
@@ -139,15 +165,18 @@ describe('BotManager', () => {
       expect(logger.debug).not.toHaveBeenCalled()
     })
 
-    it('should log when enabled', () => {
+    it('should log when enabled and wallet is a bot', () => {
       botManager = new BotManager('testnet-10', true)
+      // Initialize with a known bot address
+      vi.mocked(walletManager.deriveRoomAddress).mockReturnValue('kaspatest:botaddr1')
+      botManager.initializeBotAddresses()
       vi.clearAllMocks()
 
-      botManager.handleTurnStart('room-123', 'kaspatest:wallet1')
+      botManager.handleTurnStart('room-123', 'kaspatest:botaddr1')
 
-      expect(logger.debug).toHaveBeenCalledWith('Bot manager: Turn start', {
+      expect(logger.debug).toHaveBeenCalledWith('Bot turn detected', {
         roomId: 'room-123',
-        walletAddress: 'kaspatest:wallet1',
+        walletAddress: 'kaspatest:botaddr1',
       })
     })
   })

@@ -316,7 +316,7 @@ export default function LobbyPage() {
               {/* Quick Match Info */}
               <div className="grid grid-cols-3 gap-3">
                 <div className="bg-smoke/50 border border-edge p-4 rounded-xl text-center">
-                  <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Bet</span>
+                  <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Entry</span>
                   <span className="font-display text-2xl text-gold">{config.quickMatch.seatPrice}</span>
                   <span className="text-xs text-ash ml-1">KAS</span>
                 </div>

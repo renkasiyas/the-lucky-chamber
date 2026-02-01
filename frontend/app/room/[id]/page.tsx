@@ -388,7 +388,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="bg-smoke/50 border border-edge p-4 rounded-xl">
-                <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Bet</span>
+                <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Entry</span>
                 <span className="font-display text-xl text-gold">{room.seatPrice}</span>
                 <span className="text-xs text-ash ml-1">KAS</span>
               </div>
@@ -471,7 +471,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                       You&apos;ve joined - now send your deposit
                     </p>
                     <p className="text-ash text-xs text-center">
-                      Complete your entry by depositing the bet amount.
+                      Complete your entry by depositing the entry amount.
                     </p>
                   </>
                 )}
