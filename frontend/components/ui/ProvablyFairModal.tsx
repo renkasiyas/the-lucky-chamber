@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Room, Round } from '../../../shared'
+import { useSound } from '../../hooks/useSound'
 import { Button } from './Button'
 import { TxLink } from './TxLink'
 
@@ -30,6 +31,7 @@ export function ProvablyFairModal({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null)
   const [verifying, setVerifying] = useState(false)
+  const { play } = useSound()
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -106,7 +108,7 @@ export function ProvablyFairModal({
             PROVABLY FAIR
           </h2>
           <button
-            onClick={onClose}
+            onClick={() => { play('click'); onClose() }}
             className="p-2 rounded-lg hover:bg-smoke transition-colors text-ember hover:text-chalk"
             aria-label="Close modal"
           >
@@ -209,7 +211,7 @@ export function ProvablyFairModal({
               ) : (
                 <div className="p-3 bg-smoke border border-edge rounded-lg">
                   <button
-                    onClick={verifyCommitment}
+                    onClick={() => { play('click'); verifyCommitment() }}
                     className="text-sm text-gold hover:text-gold-light hover:underline"
                   >
                     Click to verify commitment
@@ -319,7 +321,7 @@ export function ProvablyFairModal({
           {/* Advanced Toggle */}
           <div className="pt-2 border-t border-edge">
             <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
+              onClick={() => { play('click'); setShowAdvanced(!showAdvanced) }}
               className="text-sm text-gold hover:text-gold-light hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-noir rounded"
             >
               {showAdvanced ? 'Hide' : 'Show'} Advanced Details
@@ -378,11 +380,12 @@ export function ProvablyFairButton({
   className = '',
 }: ProvablyFairButtonProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const { play } = useSound()
 
   return (
     <>
       <button
-        onClick={() => setIsOpen(true)}
+        onClick={() => { play('click'); setIsOpen(true) }}
         className={`
           inline-flex items-center gap-2 px-4 py-2
           text-sm font-display tracking-wide text-gold hover:text-gold-light

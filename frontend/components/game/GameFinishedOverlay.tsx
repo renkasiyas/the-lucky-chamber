@@ -25,7 +25,9 @@ export function GameFinishedOverlay({
   onDismiss,
   onPlayAgain,
 }: GameFinishedOverlayProps) {
-  const [phase, setPhase] = useState<'suspense' | 'intro' | 'reveal' | 'results'>('suspense')
+  // Skip suspense phase - we already had the dramatic BANG! reveal in ChamberGame
+  // Go straight to reveal to avoid "The chamber falls silent" after we just saw an explosion
+  const [phase, setPhase] = useState<'suspense' | 'intro' | 'reveal' | 'results'>('reveal')
   const [showVerifier, setShowVerifier] = useState(false)
   const { play: playSound, stop: stopSound } = useSound()
 
@@ -53,31 +55,19 @@ export function GameFinishedOverlay({
   [])
 
   useEffect(() => {
-    // Play heartbeat during suspense phase for dramatic effect
-    playSound('heartbeat', { loop: true, volume: 0.5 })
+    // We start at 'reveal' phase - the drama already happened in ChamberGame
+    // Just play win sound if survivor and transition to results
+    if (iAmSurvivor) {
+      playSound('win')
+    }
 
-    // Suspense phase with dramatic buildup
-    const t0 = setTimeout(() => {
-      stopSound('heartbeat')
-      setPhase('intro')
-    }, 2500)
-
-    const t1 = setTimeout(() => {
-      setPhase('reveal')
-      if (iAmSurvivor) {
-        playSound('win')
-      }
-    }, 3500)
-
-    const t2 = setTimeout(() => setPhase('results'), 5500)
+    // Show reveal for 2 seconds, then show results
+    const t1 = setTimeout(() => setPhase('results'), 2000)
 
     return () => {
-      clearTimeout(t0)
       clearTimeout(t1)
-      clearTimeout(t2)
-      stopSound('heartbeat')
     }
-  }, [iAmSurvivor, playSound, stopSound])
+  }, [iAmSurvivor, playSound])
 
   return (
     <motion.div
@@ -511,13 +501,13 @@ export function GameFinishedOverlay({
                 <div className="p-4 border-t border-edge/30 space-y-3">
                   <div className="flex gap-3">
                     <button
-                      onClick={onDismiss}
+                      onClick={() => { playSound('click'); onDismiss() }}
                       className="flex-1 py-3.5 px-4 bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge transition-all"
                     >
                       DETAILS
                     </button>
                     <button
-                      onClick={onPlayAgain}
+                      onClick={() => { playSound('click'); onPlayAgain() }}
                       className={`
                         flex-1 py-3.5 px-4 rounded-xl font-display text-sm tracking-wider text-void transition-all
                         ${iAmSurvivor
@@ -530,7 +520,7 @@ export function GameFinishedOverlay({
                     </button>
                   </div>
                   <button
-                    onClick={() => setShowVerifier(true)}
+                    onClick={() => { playSound('click'); setShowVerifier(true) }}
                     className="w-full py-2.5 px-4 bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold hover:text-gold-light hover:border-gold/50 hover:bg-gold/20 transition-all flex items-center justify-center gap-2"
                   >
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">

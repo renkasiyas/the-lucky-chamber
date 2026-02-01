@@ -13,6 +13,7 @@ interface ChamberGameProps {
   currentRound: number
   myAddress: string | null
   onPullTrigger?: () => void
+  onFinalDeathAnimationComplete?: () => void // Called when the final death animation (game-ending) completes
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -60,7 +61,7 @@ const TIMING = {
   respinRotations: 2,
 } as const
 
-export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: ChamberGameProps) {
+export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFinalDeathAnimationComplete }: ChamberGameProps) {
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
   // ═══════════════════════════════════════════════════════════════════════════
@@ -73,20 +74,31 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
   const [revealChamberIndex, setRevealChamberIndex] = useState<number | null>(null) // Which chamber hole to highlight on reveal
   const [showDeathVignette, setShowDeathVignette] = useState(false) // Only show after death reveal completes
   const [activelyMyTurn, setActivelyMyTurn] = useState(false) // Lock: true from turn start until sequence done
+  // Visual shooter index - decoupled from room.currentTurnSeatIndex to prevent
+  // seat indicators from updating before animations complete
+  const [visualShooterIndex, setVisualShooterIndex] = useState<number>(room.currentTurnSeatIndex ?? -1)
+  // Visual dead seats - only show death AFTER reveal animation, not when room updates
+  const [visuallyDeadSeats, setVisuallyDeadSeats] = useState<Set<number>>(() => {
+    // Initialize with currently dead seats from room
+    return new Set(room.seats.filter(s => !s.alive).map(s => s.index))
+  })
 
   // Animation controllers
   const hammerControls = useAnimation()
+  const hammerOrbitControls = useAnimation() // Controls hammer rotation around chamber
   const barrelControls = useAnimation()
 
   // Refs
   const timeouts = useRef<NodeJS.Timeout[]>([])
   const lastProcessedRound = useRef(room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1)
   const barrelAngle = useRef(0)
+  const hammerOrbitAngle = useRef((room.currentTurnSeatIndex ?? 0) * 60) // Track cumulative rotation
   const hasSpunThisTurn = useRef(false)
   const recentlySpun = useRef(false) // Prevent double spin after respin
   const spectatorSequenceRunning = useRef(false) // Prevent duplicate spectator sequences
   // If game is already PLAYING on mount, we likely reloaded mid-game - skip spin animation
   const mountedDuringGame = useRef(room.state === 'PLAYING')
+  const triggerPullTime = useRef<number>(0) // Track when trigger was pulled for timing
 
   const { play, stop, stopAll } = useSound()
 
@@ -94,12 +106,15 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
   // DERIVED STATE
   // ═══════════════════════════════════════════════════════════════════════════
   const mySeat = room.seats.find(s => s.walletAddress === myAddress)
-  const currentShooterIndex = room.currentTurnSeatIndex ?? -1
-  const currentShooter = room.seats.find(s => s.index === currentShooterIndex)
+  // Server's actual turn index (may update before animations complete)
+  const serverShooterIndex = room.currentTurnSeatIndex ?? -1
+  // Use visualShooterIndex for UI display - it only updates after animations
+  const currentShooter = room.seats.find(s => s.index === visualShooterIndex)
+  // For turn logic, use server state; for display, use visual state
   const isMyTurn = !!(
     room.state === 'PLAYING' &&
     mySeat?.alive &&
-    currentShooterIndex === mySeat.index
+    serverShooterIndex === mySeat.index
   )
   const aliveCount = room.seats.filter(s => s.alive).length
   const latestRound = room.rounds[room.rounds.length - 1]
@@ -118,21 +133,58 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
     return t
   }, [])
 
-  // Compute which chamber index is visually under the HAMMER (at top)
-  // Hammer is fixed at top, barrel rotates chambers clockwise
+  // Compute which chamber index is visually under the HAMMER
+  // Hammer orbits around chamber, barrel rotates chambers
   const getChamberUnderHammer = useCallback(() => {
-    // Chamber i is initially at angle (i * 60 - 90)°, so chamber 0 is at TOP (-90°)
-    // When barrel rotates clockwise by θ, chamber 0 moves to -90° + θ
-    // The chamber at top after rotation is: (0 - θ/60) mod 6
-    //
-    // Example: barrel rotates 60° → chamber 5 is now at top
-    // Example: barrel rotates 180° → chamber 3 is now at top
-    const rotation = barrelAngle.current % 360
-    const normalizedRotation = rotation < 0 ? rotation + 360 : rotation
-    const stepsRotated = Math.round(normalizedRotation / 60) % 6
-    const chamberIndex = (6 - stepsRotated) % 6
+    // Chamber i starts at angle (i * 60)° from top (0°)
+    // After barrel rotates by b°, chamber i is at angle (i * 60 + b)°
+    // Hammer is at angle h° (where h = seat * 60)
+    // We want chamber where (i * 60 + b) ≡ h (mod 360)
+    // So: i = (h - b) / 60 (mod 6)
+    const barrelRotation = barrelAngle.current % 360
+    const hammerRotation = hammerOrbitAngle.current % 360
+
+    // Normalize to positive
+    const b = barrelRotation < 0 ? barrelRotation + 360 : barrelRotation
+    const h = hammerRotation < 0 ? hammerRotation + 360 : hammerRotation
+
+    // Find chamber at hammer position
+    let diff = h - b
+    if (diff < 0) diff += 360
+
+    const chamberIndex = Math.round(diff / 60) % 6
     return chamberIndex
   }, [])
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ROTATE HAMMER TO TARGET SEAT - hammer orbits around chamber to point at shooter
+  // ═══════════════════════════════════════════════════════════════════════════
+  const rotateHammerToSeat = useCallback((seatIndex: number, duration: number = 0.6) => {
+    // Guard against invalid seat index (can happen when game not yet started)
+    if (seatIndex < 0 || seatIndex > 5) return
+
+    // Each seat is 60° apart, seat 0 is at top (0° rotation)
+    const targetAngle = seatIndex * 60
+
+    // Calculate shortest path rotation (avoid spinning the long way around)
+    const currentNormalized = hammerOrbitAngle.current % 360
+    let delta = targetAngle - currentNormalized
+
+    // Normalize delta to [-180, 180] range for shortest path
+    if (delta > 180) delta -= 360
+    if (delta < -180) delta += 360
+
+    const newAngle = hammerOrbitAngle.current + delta
+    hammerOrbitAngle.current = newAngle
+
+    hammerOrbitControls.start({
+      rotate: newAngle,
+      transition: {
+        duration,
+        ease: [0.4, 0, 0.2, 1], // Smooth ease-in-out
+      }
+    })
+  }, [hammerOrbitControls])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SPIN THE BARREL
@@ -183,16 +235,22 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
     setChamberRevealed(false)
     setRevealResult(null)
     setActivelyMyTurn(true) // Lock: my turn is now in progress
+    setVisualShooterIndex(serverShooterIndex) // Sync visual display at turn start
 
     // On page reload mid-game OR if barrel was just spun, skip directly to ready
     // (we don't know if barrel was already spun before reload)
     if (mountedDuringGame.current || recentlySpun.current) {
       mountedDuringGame.current = false
       recentlySpun.current = false
+      // Snap hammer to position instantly on reload
+      rotateHammerToSeat(serverShooterIndex, 0)
       setPhase('ready')
       setCountdown(30)
       return
     }
+
+    // Rotate hammer to point at this seat
+    rotateHammerToSeat(serverShooterIndex)
 
     setPhase('spin')
 
@@ -201,7 +259,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
       setPhase('ready')
       setCountdown(30)
     })
-  }, [clearTimeouts, stopAll, spinBarrel, currentShooterIndex])
+  }, [clearTimeouts, stopAll, spinBarrel, serverShooterIndex, rotateHammerToSeat])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PULL TRIGGER - The moment of truth
@@ -210,6 +268,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
     if (phase !== 'ready') return
 
     setPhase('pulling')
+    triggerPullTime.current = Date.now() // Track for timing reveal
     play('cock')
 
     // Hammer pulls back
@@ -232,14 +291,28 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
   // ═══════════════════════════════════════════════════════════════════════════
   const revealOutcome = useCallback((died: boolean, shooterSeat: number, isMyReveal: boolean) => {
     clearTimeouts()
-    stop('heartbeat')
+    // DON'T stop cock yet - let it finish playing for full dramatic effect
 
-    // Start tension sound during the suspense
-    play('heartbeat', { loop: true, volume: 0.8 })
+    // Calculate how long until cock sound finishes
+    // For my turn: cock started at triggerPullTime
+    // For spectator: revealOutcome called TIMING.cockDuration after cock started
+    let waitForCock: number
+    if (isMyReveal && triggerPullTime.current > 0) {
+      const elapsed = Date.now() - triggerPullTime.current
+      waitForCock = Math.max(0, AUDIO.cock - elapsed)
+    } else {
+      // Spectator or fallback: cock has been playing for TIMING.cockDuration
+      waitForCock = Math.max(0, AUDIO.cock - TIMING.cockDuration)
+    }
 
-    // After suspense, reveal
+    // After cock finishes, start heartbeat suspense
     schedule(() => {
-      stop('heartbeat')
+      stop('cock')
+      play('heartbeat', { loop: true, volume: 0.8 })
+
+      // After suspense, reveal
+      schedule(() => {
+        stop('heartbeat')
 
       // Compute which chamber is visually under the hammer RIGHT NOW
       const chamber = getChamberUnderHammer()
@@ -271,11 +344,16 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
           hasSpunThisTurn.current = false
           recentlySpun.current = false // Clear so next player spins fresh
           setActivelyMyTurn(false)
+          // NOW mark seat as visually dead (after animation completes)
+          setVisuallyDeadSeats(prev => new Set([...prev, shooterSeat]))
+          // Visual sync happens via the idle sync effect now that activelyMyTurn=false
           // Show death vignette ONLY after animation completes (if I died)
           if (isMyReveal) {
             setShowDeathVignette(true)
           }
           play('reload')
+          // Signal that death animation is complete - page can now show victory if game ended
+          onFinalDeathAnimationComplete?.()
         }, TIMING.revealDisplay + AUDIO.eliminated)
 
       } else {
@@ -295,13 +373,15 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
             hasSpunThisTurn.current = false
             setActivelyMyTurn(false)
             recentlySpun.current = true // Prevent next player from double-spinning
+            // Visual sync happens via the idle sync effect now that activelyMyTurn=false
             play('reload')
           })
         }, TIMING.revealDisplay)
       }
-    }, TIMING.suspenseAfterCock)
+      }, TIMING.suspenseAfterCock)
+    }, waitForCock)
 
-  }, [clearTimeouts, stop, play, hammerControls, schedule, spinBarrel, getChamberUnderHammer])
+  }, [clearTimeouts, stop, play, hammerControls, schedule, spinBarrel, getChamberUnderHammer, onFinalDeathAnimationComplete])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SPECTATOR SEQUENCE - Watch someone else's turn
@@ -316,6 +396,10 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
     setChamberRevealed(false)
     setRevealResult(null)
     hasSpunThisTurn.current = false
+    // Lock visual shooter to THIS round's shooter for the animation
+    setVisualShooterIndex(shooterSeat)
+    // Rotate hammer to point at this seat
+    rotateHammerToSeat(shooterSeat)
 
     // Phase 1: Spin
     setPhase('spin')
@@ -335,13 +419,19 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
         revealOutcome(died, shooterSeat, false) // false = not my reveal (spectating)
       }, TIMING.cockDuration)
     })
-  }, [clearTimeouts, stopAll, spinBarrel, play, hammerControls, schedule, revealOutcome])
+  }, [clearTimeouts, stopAll, spinBarrel, play, hammerControls, schedule, revealOutcome, rotateHammerToSeat])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HANDLE SERVER ROUND RESULTS
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (room.state !== 'PLAYING') {
+      // Don't interrupt active reveal animations - let death scenes play out
+      // Even if game ended, spectators should see the final death reveal
+      if (phase === 'reveal' || phase === 'pulling' || spectatorSequenceRunning.current) {
+        // Animation in progress - let it complete naturally
+        return
+      }
       setPhase('idle')
       clearTimeouts()
       stopAll()
@@ -379,7 +469,23 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
       setPhase('idle')
       hasSpunThisTurn.current = false
     }
-  }, [room.state, isMyTurn, phase, startMyTurn, currentShooterIndex])
+  }, [room.state, isMyTurn, phase, startMyTurn, serverShooterIndex])
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SYNC VISUAL SHOOTER ON IDLE - when not animating, keep visual in sync
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    // Only sync when idle (not during animations)
+    if (phase !== 'idle') return
+    // Don't sync during locked animation sequences (wait for callbacks to complete)
+    if (activelyMyTurn) return
+    // And when game is playing
+    if (room.state !== 'PLAYING') return
+    // Sync visual to server state
+    setVisualShooterIndex(serverShooterIndex)
+    // Also rotate hammer to match (instant snap when idle)
+    rotateHammerToSeat(serverShooterIndex, 0.3)
+  }, [phase, activelyMyTurn, room.state, serverShooterIndex, rotateHammerToSeat])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COUNTDOWN (only during ready phase)
@@ -402,18 +508,22 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
   }, [phase, room.state, play])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // INITIALIZE DEATH STATE (for page refresh when already dead)
-  // Only sets vignette if NOT in an active turn (prevents early spoiler)
+  // INITIALIZE/SYNC DEATH STATE (for page refresh when already dead)
+  // Only syncs if NOT in an active turn (prevents early spoiler)
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     // Don't spoil during active turn sequence
     if (activelyMyTurn) return
     if (phase !== 'idle') return
 
+    // Sync visuallyDeadSeats with room state when idle
+    const deadFromRoom = new Set(room.seats.filter(s => !s.alive).map(s => s.index))
+    setVisuallyDeadSeats(deadFromRoom)
+
     if (mySeat && !mySeat.alive && !showDeathVignette) {
       setShowDeathVignette(true)
     }
-  }, [mySeat, showDeathVignette, activelyMyTurn, phase])
+  }, [mySeat, showDeathVignette, activelyMyTurn, phase, room.seats])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UNMOUNT CLEANUP - Prevent setState-after-unmount and stray audio
@@ -664,8 +774,8 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
 
               const seat = room.seats.find(s => s.index === i)
               const isMe = seat?.walletAddress === myAddress
-              const isShooter = i === currentShooterIndex
-              const isDead = seat && !seat.alive
+              const isShooter = i === visualShooterIndex // Use visual state, not server state
+              const isDead = visuallyDeadSeats.has(i) // Use visual state, not server state
 
               return (
                 <motion.div
@@ -702,9 +812,14 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
           </div>
 
           {/* ══════════════════════════════════════════════════════════════════
-              FIRING PIN / HAMMER (fixed at top - seats rotate instead)
+              FIRING PIN / HAMMER - rotates around chamber to point at current shooter
               ══════════════════════════════════════════════════════════════════ */}
-          <div className="absolute inset-0 z-20 pointer-events-none">
+          <motion.div
+            className="absolute inset-0 z-20 pointer-events-none"
+            animate={hammerOrbitControls}
+            initial={{ rotate: (room.currentTurnSeatIndex ?? 0) * 60 }}
+            style={{ transformOrigin: 'center center' }}
+          >
             <div className="absolute -top-1 left-1/2 -translate-x-1/2">
               <motion.div
                 animate={hammerControls}
@@ -729,7 +844,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
                 <div className="w-0 h-0 mx-auto border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[14px] border-t-gold-dark" />
               </motion.div>
             </div>
-          </div>
+          </motion.div>
 
         </div>
 
@@ -755,10 +870,10 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
                     animate={{ boxShadow: ['0 0 0 0 rgba(245,158,11,0.3)', '0 0 0 10px rgba(245,158,11,0)', '0 0 0 0 rgba(245,158,11,0)'] }}
                     transition={{ repeat: Infinity, duration: 2 }}
                   >
-                    <span className="font-display text-ember">{currentShooterIndex + 1}</span>
+                    <span className="font-display text-ember">{visualShooterIndex + 1}</span>
                   </motion.div>
                   <div className="text-left">
-                    <p className="text-chalk/90 font-display text-sm">Seat {currentShooterIndex + 1}</p>
+                    <p className="text-chalk/90 font-display text-sm">Seat {visualShooterIndex + 1}</p>
                     <p className="text-ash/40 text-[10px] font-mono">
                       {currentShooter.walletAddress?.slice(0, 6)}...{currentShooter.walletAddress?.slice(-4)}
                     </p>
@@ -807,7 +922,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
                   SPINNING
                 </motion.p>
                 <p className="text-gold/60 text-xs font-mono uppercase tracking-wider">
-                  seat {currentShooterIndex + 1}&apos;s fate spins...
+                  seat {visualShooterIndex + 1}&apos;s fate spins...
                 </p>
               </motion.div>
             )}
@@ -874,7 +989,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
                   animate={{ opacity: [0.5, 1, 0.5], scale: [1, 1.05, 1] }}
                   transition={{ repeat: Infinity, duration: 0.6 }}
                 >
-                  {isMyTurn ? '...' : `SEAT ${currentShooterIndex + 1}...`}
+                  {isMyTurn ? '...' : `SEAT ${visualShooterIndex + 1}...`}
                 </motion.p>
 
                 {/* Heartbeat visualization */}
@@ -912,9 +1027,9 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.2 }}
                 >
-                  {latestRound?.shooterSeatIndex === mySeat?.index
+                  {visualShooterIndex === mySeat?.index
                     ? "💀 YOU'RE OUT"
-                    : `💀 SEAT ${(eliminatedSeat ?? 0) + 1} ELIMINATED`}
+                    : `💀 SEAT ${visualShooterIndex + 1} ELIMINATED`}
                 </motion.p>
               </motion.div>
             )}
@@ -943,9 +1058,9 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: Ch
                   animate={{ opacity: 1 }}
                   transition={{ delay: 0.15 }}
                 >
-                  {latestRound?.shooterSeatIndex === mySeat?.index
+                  {visualShooterIndex === mySeat?.index
                     ? 'you survived!'
-                    : `seat ${(latestRound?.shooterSeatIndex ?? 0) + 1} survives`}
+                    : `seat ${visualShooterIndex + 1} survives`}
                 </motion.p>
               </motion.div>
             )}

@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import { useKasware } from '../../../hooks/useKasware'
 import { useWebSocket } from '../../../hooks/useWebSocket'
+import { useSound } from '../../../hooks/useSound'
 import { Button } from '../../../components/ui/Button'
 import { Card, CardHeader, CardTitle, CardContent } from '../../../components/ui/Card'
 import { RoomStateBadge } from '../../../components/ui/Badge'
@@ -56,10 +57,17 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const prevRoomStateRef = useRef<string | null>(null)
   const lockStartTimeRef = useRef<number | null>(null)
   const hasJoinedRef = useRef(false)
+  const pendingVictoryRef = useRef(false) // True when waiting for death animation to complete
   const toast = useToast()
+  const toastRef = useRef(toast)
+  toastRef.current = toast
+  const { play } = useSound()
 
   const explorerUrl = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://kaspa.stream'
   const ws = useWebSocket(config.ws.url)
+
+  // Stable refs for use in websocket handlers (avoids infinite re-subscribe loop)
+  const fetchRoomRef = useRef<() => Promise<Room | null>>(null!)
 
   const fetchRoom = useCallback(async (): Promise<Room | null> => {
     try {
@@ -81,6 +89,9 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       return null
     }
   }, [roomId, router])
+
+  // Keep ref in sync
+  fetchRoomRef.current = fetchRoom
 
   useEffect(() => {
     if (!initializing && !connected) {
@@ -107,27 +118,23 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     const unsubGameStart = ws.subscribe('game:start', (payload: { roomId: string }) => {
       if (payload.roomId === roomId) {
-        toast.info('Game starting!')
-        fetchRoom()
+        toastRef.current.info('Game starting!')
+        fetchRoomRef.current()
       }
     })
 
     const unsubRoundResult = ws.subscribe('round:result', (payload: { roomId: string; round: { index: number; shooterSeatIndex: number; died: boolean } }) => {
       if (payload.roomId === roomId) {
-        const died = payload.round.died
-        if (died) {
-          toast.warning(`Round ${payload.round.index + 1}: Seat ${payload.round.shooterSeatIndex + 1} — BANG!`)
-        } else {
-          toast.info(`Round ${payload.round.index + 1}: Seat ${payload.round.shooterSeatIndex + 1} — click`)
-        }
-        fetchRoom()
+        // Fetch room to get round data, but NO TOAST - let ChamberGame animate the reveal
+        // The visual reveal is the feedback, toasts would spoil it
+        fetchRoomRef.current()
       }
     })
 
     const unsubGameEnd = ws.subscribe('game:end', (payload: { roomId: string }) => {
       if (payload.roomId === roomId) {
-        toast.success('Game ended! Payouts processing...')
-        fetchRoom()
+        // No toast here - wait for animation to complete, then show victory
+        fetchRoomRef.current()
       }
     })
 
@@ -139,7 +146,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     const unsubTurnStart = ws.subscribe('turn:start', (payload: { roomId: string; seatIndex: number; walletAddress: string | null }) => {
       if (payload.roomId === roomId) {
-        fetchRoom()
+        fetchRoomRef.current()
       }
     })
 
@@ -151,7 +158,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       unsubRngReveal()
       unsubTurnStart()
     }
-  }, [ws.connected, ws.subscribe, roomId, toast, fetchRoom, address])
+  }, [ws.connected, ws.subscribe, ws.send, roomId, address])
 
   const joinRoom = async () => {
     if (!address || !room) return
@@ -288,12 +295,34 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     }
   }
 
-  // Detect game finished transition
-  useEffect(() => {
-    if (!room) return
-    if (prevRoomStateRef.current === 'PLAYING' && room.state === 'SETTLED') {
+  // Handler for when ChamberGame's death animation completes
+  const handleDeathAnimationComplete = useCallback(() => {
+    // If game is SETTLED and we were waiting, show victory now
+    if (pendingVictoryRef.current) {
+      pendingVictoryRef.current = false
       setShowGameFinished(true)
     }
+  }, [])
+
+  // Detect game finished transition - wait for animation callback
+  useEffect(() => {
+    if (!room) return
+
+    // If we loaded the page when game was already SETTLED (refresh), show results immediately
+    if (prevRoomStateRef.current === null && room.state === 'SETTLED') {
+      setShowGameFinished(true)
+      prevRoomStateRef.current = room.state
+      return
+    }
+
+    if (prevRoomStateRef.current === 'PLAYING' && room.state === 'SETTLED') {
+      // Mark that we're waiting for death animation to complete
+      // The callback from ChamberGame will set showGameFinished
+      pendingVictoryRef.current = true
+      prevRoomStateRef.current = room.state
+      return
+    }
+
     prevRoomStateRef.current = room.state
   }, [room?.state])
 
@@ -388,7 +417,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
         {/* Back Button - larger touch target for mobile */}
         <button
-          onClick={() => router.push('/lobby')}
+          onClick={() => { play('click'); router.push('/lobby') }}
           className="animate-fade-in inline-flex items-center gap-2 min-h-[44px] min-w-[44px] px-4 py-2 text-ash hover:text-chalk hover:bg-steel/50 rounded-lg transition-all duration-200 touch-manipulation"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -599,7 +628,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </Card>
         )}
 
-        {room.state === 'PLAYING' && (
+        {/* Keep ChamberGame mounted during SETTLED to let death animation complete */}
+        {(room.state === 'PLAYING' || (room.state === 'SETTLED' && !showGameFinished)) && (
           <Card variant="danger" className="!bg-noir/80 border-blood/40">
             <CardContent className="pt-6">
               <ChamberGame
@@ -607,6 +637,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                 currentRound={room.rounds.length}
                 myAddress={address}
                 onPullTrigger={handlePullTrigger}
+                onFinalDeathAnimationComplete={handleDeathAnimationComplete}
               />
             </CardContent>
           </Card>
@@ -678,8 +709,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </Card>
         )}
 
-        {/* Results */}
-        {room.state === 'SETTLED' && (
+        {/* Results - gated behind showGameFinished to let death animation complete */}
+        {room.state === 'SETTLED' && showGameFinished && (
           <Card className="border-alive/30 animate-slide-up" style={{ animationDelay: '0.3s', opacity: 0 }}>
             <CardHeader>
               <CardTitle className="text-alive-light">GAME OVER</CardTitle>

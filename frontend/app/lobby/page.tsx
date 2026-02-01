@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useKasware } from '../../hooks/useKasware'
 import { useWebSocket } from '../../hooks/useWebSocket'
+import { useSound } from '../../hooks/useSound'
 import { Button } from '../../components/ui/Button'
 import { Card, CardContent } from '../../components/ui/Card'
 import { useToast } from '../../components/ui/Toast'
@@ -50,6 +51,7 @@ export default function LobbyPage() {
   const [inQueue, setInQueue] = useState(false)
   const [botStatus, setBotStatus] = useState<{ enabled: boolean; canEnable: boolean; botCount: number } | null>(null)
   const toast = useToast()
+  const { play } = useSound()
 
   const ws = useWebSocket(appConfig.ws.url)
 
@@ -267,7 +269,7 @@ export default function LobbyPage() {
         {/* Tab Selector */}
         <div className="flex gap-1 p-1.5 bg-noir border border-edge rounded-xl animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
           <button
-            onClick={() => config?.quickMatch.enabled && setActiveTab('quickmatch')}
+            onClick={() => { play('click'); config?.quickMatch.enabled && setActiveTab('quickmatch') }}
             disabled={!config?.quickMatch.enabled}
             className={`flex-1 py-3 px-4 rounded-lg font-display tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
               !config?.quickMatch.enabled
@@ -280,7 +282,7 @@ export default function LobbyPage() {
             QUICK MATCH
           </button>
           <button
-            onClick={() => setActiveTab('custom')}
+            onClick={() => { play('click'); setActiveTab('custom') }}
             className={`flex-1 py-3 px-4 rounded-lg font-display tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
               activeTab === 'custom'
                 ? 'bg-gradient-to-r from-gold to-gold-dark text-void shadow-gold'
@@ -365,7 +367,7 @@ export default function LobbyPage() {
               {botStatus?.canEnable && (
                 <div className="border-t border-edge pt-4 mt-2">
                   <button
-                    onClick={toggleBots}
+                    onClick={() => { play('click'); toggleBots() }}
                     className="w-full flex items-center justify-between p-3 bg-smoke/30 border border-edge hover:border-edge-light rounded-lg transition-colors group"
                   >
                     <div className="flex items-center gap-3">
@@ -419,7 +421,7 @@ export default function LobbyPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {/* Regular Mode */}
                   <button
-                    onClick={() => setCustomMode('REGULAR')}
+                    onClick={() => { play('click'); setCustomMode('REGULAR') }}
                     disabled={!config?.modes.REGULAR.enabled}
                     className={`group relative p-5 rounded-xl border-2 transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-noir ${
                       !config?.modes.REGULAR.enabled
@@ -455,7 +457,7 @@ export default function LobbyPage() {
 
                   {/* Extreme Mode */}
                   <button
-                    onClick={() => config?.modes.EXTREME.enabled && setCustomMode('EXTREME')}
+                    onClick={() => { play('click'); config?.modes.EXTREME.enabled && setCustomMode('EXTREME') }}
                     disabled={!config?.modes.EXTREME.enabled}
                     className={`relative p-5 rounded-xl border-2 transition-all text-left ${
                       !config?.modes.EXTREME.enabled
