@@ -49,7 +49,6 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [loading, setLoading] = useState(true)
   const [joining, setJoining] = useState(false)
   const [showGameFinished, setShowGameFinished] = useState(false)
-  const [currentTurnWallet, setCurrentTurnWallet] = useState<string | null>(null)
   const [depositFailed, setDepositFailed] = useState(false)
   const [depositSent, setDepositSent] = useState(false)
   const [retryingDeposit, setRetryingDeposit] = useState(false)
@@ -140,8 +139,6 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     const unsubTurnStart = ws.subscribe('turn:start', (payload: { roomId: string; seatIndex: number; walletAddress: string | null }) => {
       if (payload.roomId === roomId) {
-        // Track whose turn it is directly from the event
-        setCurrentTurnWallet(payload.walletAddress)
         fetchRoom()
       }
     })
@@ -609,7 +606,6 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                 room={room}
                 currentRound={room.rounds.length}
                 myAddress={address}
-                currentTurnWallet={currentTurnWallet}
                 onPullTrigger={handlePullTrigger}
               />
             </CardContent>

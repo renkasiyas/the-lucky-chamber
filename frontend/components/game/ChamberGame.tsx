@@ -1,5 +1,5 @@
 // ABOUTME: Interactive Russian Roulette chamber - cinematic game experience
-// ABOUTME: Frame-perfect audio-visual synchronization with dramatic tension building
+// ABOUTME: Barrel spins first, then trigger pull, then reveal - surprise choreography
 
 'use client'
 
@@ -12,102 +12,81 @@ interface ChamberGameProps {
   room: Room
   currentRound: number
   myAddress: string | null
-  currentTurnWallet?: string | null
-  onRoundComplete?: () => void
   onPullTrigger?: () => void
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GAME PHASES - The correct sequence
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. spin     → Barrel spinning, chamber unknown
+// 2. ready    → Barrel stopped, can pull trigger
+// 3. pulling  → Hammer cocking back
+// 4. reveal   → Chamber revealed - BANG or click
+// 5. respin   → If survived, barrel spins again
+// 6. idle     → Watching someone else's turn
+
 type GamePhase =
-  | 'idle'           // Waiting, not my turn
-  | 'ready'          // My turn, can pull
-  | 'cock'           // Hammer pulling back (2.4s sound)
-  | 'spin'           // Barrel spinning (3.3s sound)
-  | 'dread'          // Heartbeat tension (variable, builds)
-  | 'bang'           // Death result
-  | 'click'          // Survival result
-  | 'reset'          // Preparing next round
+  | 'idle'      // Watching, not my turn
+  | 'spin'      // Barrel spinning (my turn starting)
+  | 'ready'     // Barrel stopped, can pull trigger
+  | 'pulling'   // Trigger pulled, hammer cocking
+  | 'reveal'    // Result showing
+  | 'respin'    // Survived - barrel spinning again
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SOUND DURATIONS (from actual files) - These are SACRED, never approximate
+// AUDIO DURATIONS (from actual files)
 // ═══════════════════════════════════════════════════════════════════════════
 const AUDIO = {
-  cock: 2400,           // Full mechanical cock sound
-  cylinderSpin: 3336,   // Barrel spin with deceleration
-  heartbeat: 3204,      // One full heartbeat cycle
-  emptyClick: 2000,     // Relief click
-  eliminated: 3000,     // Death sound
-  reload: 3370,         // Chamber reload
+  cock: 2400,
+  cylinderSpin: 3336,
+  heartbeat: 3204,
+  emptyClick: 2000,
+  eliminated: 3000,
+  reload: 3370,
 } as const
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CHOREOGRAPHY - Cinematic timeline synced to audio
+// CHOREOGRAPHY TIMING
 // ═══════════════════════════════════════════════════════════════════════════
-const SCENE = {
-  // ACT 1: THE COCK (0 - 2400ms)
-  // Sound: Mechanical ratcheting as hammer pulls back
-  // Visual: Hammer rises slowly, tension begins
-  cock: {
-    hammerRise: { start: 0, duration: 800 },      // Hammer pulls back
-    hammerHold: { start: 800, duration: 1600 },   // Held in cocked position
-  },
-
-  // ACT 2: THE SPIN (2400 - 5736ms)
-  // Sound: Cylinder whirring, slowing down
-  // Visual: Barrel rotates fast then decelerates
-  spin: {
-    start: 2400,
-    duration: 3336,
-    rotations: 5,           // Full spins
-    // Barrel decelerates naturally with easeOut
-  },
-
-  // ACT 3: THE DREAD (5736 - 9500ms)
-  // Sound: Heartbeat loop, 2-3 beats
-  // Visual: Everything pulses with the heart, vignette closes in
-  dread: {
-    start: 5736,
-    minDuration: 3200,      // At least one full heartbeat
-    maxDuration: 4800,      // Up to 1.5 heartbeats for spectators
-    beatInterval: 800,      // Visual pulse every 800ms (matches heartbeat BPM)
-  },
-
-  // ACT 4: THE MOMENT (variable)
-  // Sound: Either BANG or click
-  // Visual: Flash, result reveal
-  result: {
-    flashDuration: 80,
-    revealDelay: 100,
-    displayTime: 2800,
-  },
-
-  // ACT 5: RESET
-  reset: {
-    delay: 400,
-    // reload sound plays (3.37s)
-  },
+const TIMING = {
+  spinDuration: 3336,       // Match cylinder-spin sound
+  spinRotations: 5,
+  cockDuration: 800,        // Hammer pull back (first part of cock sound)
+  suspenseAfterCock: 1600,  // Hold tension before reveal
+  revealFlash: 80,
+  revealDisplay: 2500,      // How long to show result
+  respinDelay: 800,         // Pause before respin
+  respinDuration: 2000,     // Shorter respin
+  respinRotations: 2,
 } as const
 
-export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, onPullTrigger }: ChamberGameProps) {
+export function ChamberGame({ room, currentRound, myAddress, onPullTrigger }: ChamberGameProps) {
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
   // ═══════════════════════════════════════════════════════════════════════════
   const [phase, setPhase] = useState<GamePhase>('idle')
   const [countdown, setCountdown] = useState(30)
-  const [dreadBeat, setDreadBeat] = useState(0)        // Which heartbeat we're on
-  const [resultType, setResultType] = useState<'bang' | 'click' | null>(null)
-  const [showMuzzleFlash, setShowMuzzleFlash] = useState(false)
-  const [showReliefGlow, setShowReliefGlow] = useState(false)
+  const [revealResult, setRevealResult] = useState<'bang' | 'click' | null>(null)
+  const [showFlash, setShowFlash] = useState(false)
   const [eliminatedSeat, setEliminatedSeat] = useState<number | null>(null)
+  const [chamberRevealed, setChamberRevealed] = useState(false) // Only show loaded/empty after reveal
+  const [revealChamberIndex, setRevealChamberIndex] = useState<number | null>(null) // Which chamber hole to highlight on reveal
+  const [showDeathVignette, setShowDeathVignette] = useState(false) // Only show after death reveal completes
+  const [activelyMyTurn, setActivelyMyTurn] = useState(false) // Lock: true from turn start until sequence done
 
   // Animation controllers
   const hammerControls = useAnimation()
   const barrelControls = useAnimation()
 
-  // Refs for cleanup and tracking
+  // Refs
   const timeouts = useRef<NodeJS.Timeout[]>([])
-  const heartbeatInterval = useRef<NodeJS.Timeout | null>(null)
   const lastProcessedRound = useRef(room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1)
   const barrelAngle = useRef(0)
+  const hasSpunThisTurn = useRef(false)
+  const recentlySpun = useRef(false) // Prevent double spin after respin
+  const spectatorSequenceRunning = useRef(false) // Prevent duplicate spectator sequences
+  // If game is already PLAYING on mount, we likely reloaded mid-game - skip spin animation
+  const mountedDuringGame = useRef(room.state === 'PLAYING')
 
   const { play, stop, stopAll } = useSound()
 
@@ -122,20 +101,15 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
     mySeat?.alive &&
     currentShooterIndex === mySeat.index
   )
-  const amIDead = mySeat && !mySeat.alive
   const aliveCount = room.seats.filter(s => s.alive).length
   const latestRound = room.rounds[room.rounds.length - 1]
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILITIES
   // ═══════════════════════════════════════════════════════════════════════════
-  const clearAllTimeouts = useCallback(() => {
+  const clearTimeouts = useCallback(() => {
     timeouts.current.forEach(clearTimeout)
     timeouts.current = []
-    if (heartbeatInterval.current) {
-      clearInterval(heartbeatInterval.current)
-      heartbeatInterval.current = null
-    }
   }, [])
 
   const schedule = useCallback((fn: () => void, ms: number) => {
@@ -144,142 +118,224 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
     return t
   }, [])
 
+  // Compute which chamber index is visually under the HAMMER (at top)
+  // Hammer is fixed at top, barrel rotates chambers clockwise
+  const getChamberUnderHammer = useCallback(() => {
+    // Chamber i is initially at angle (i * 60 - 90)°, so chamber 0 is at TOP (-90°)
+    // When barrel rotates clockwise by θ, chamber 0 moves to -90° + θ
+    // The chamber at top after rotation is: (0 - θ/60) mod 6
+    //
+    // Example: barrel rotates 60° → chamber 5 is now at top
+    // Example: barrel rotates 180° → chamber 3 is now at top
+    const rotation = barrelAngle.current % 360
+    const normalizedRotation = rotation < 0 ? rotation + 360 : rotation
+    const stepsRotated = Math.round(normalizedRotation / 60) % 6
+    const chamberIndex = (6 - stepsRotated) % 6
+    return chamberIndex
+  }, [])
+
   // ═══════════════════════════════════════════════════════════════════════════
-  // THE SEQUENCE - Cinematic pull trigger animation
+  // SPIN THE BARREL
   // ═══════════════════════════════════════════════════════════════════════════
-  const runSequence = useCallback(async (died: boolean, forSpectator: boolean) => {
-    clearAllTimeouts()
-    stopAll()
-    setDreadBeat(0)
-    setResultType(null)
-    setShowMuzzleFlash(false)
-    setShowReliefGlow(false)
+  const spinBarrel = useCallback((duration: number, rotations: number, onComplete?: () => void) => {
+    play('cylinder-spin')
 
-    const dreadDuration = forSpectator ? SCENE.dread.maxDuration : SCENE.dread.minDuration
+    // Calculate spin with random offset, then snap to nearest 60° detent
+    const rawAngle = barrelAngle.current + (rotations * 360) + Math.random() * 60
+    const snappedAngle = Math.round(rawAngle / 60) * 60
+    barrelAngle.current = snappedAngle
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ACT 1: THE COCK
-    // The hammer slowly, deliberately pulls back
-    // ─────────────────────────────────────────────────────────────────────────
-    setPhase('cock')
-    play('cock')
-
-    // Hammer animation - slow, deliberate pull
-    hammerControls.start({
-      y: -16,
+    // Main spin animation (slightly shorter to leave room for snap)
+    const mainDuration = duration - 120
+    barrelControls.start({
+      rotate: rawAngle,
       transition: {
-        duration: SCENE.cock.hammerRise.duration / 1000,
-        ease: [0.2, 0, 0.4, 1], // Slow start, smooth finish
+        duration: mainDuration / 1000,
+        ease: [0.1, 0.4, 0.2, 1], // Fast start, slow end
       }
     })
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ACT 2: THE SPIN
-    // Barrel spins - fast at first, then decelerates
-    // ─────────────────────────────────────────────────────────────────────────
+    // Micro-snap to exact detent position for perfect chamber alignment
     schedule(() => {
-      setPhase('spin')
-      play('cylinder-spin')
-
-      // Calculate final rotation (current + full spins + random offset)
-      const newAngle = barrelAngle.current + (SCENE.spin.rotations * 360) + Math.random() * 60
-      barrelAngle.current = newAngle
-
       barrelControls.start({
-        rotate: newAngle,
+        rotate: snappedAngle,
         transition: {
-          duration: SCENE.spin.duration / 1000,
-          ease: [0.1, 0.4, 0.2, 1], // Fast start, long deceleration
+          duration: 0.12,
+          ease: [0.4, 0, 0.2, 1],
         }
       })
-    }, SCENE.spin.start)
+    }, mainDuration)
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ACT 3: THE DREAD
-    // Heartbeat builds tension - everything pulses
-    // ─────────────────────────────────────────────────────────────────────────
-    schedule(() => {
-      setPhase('dread')
-      play('heartbeat', { loop: true, volume: 0.85 })
+    if (onComplete) {
+      schedule(onComplete, duration)
+    }
+  }, [play, barrelControls, schedule])
 
-      // Start heartbeat visual sync
-      let beat = 0
-      heartbeatInterval.current = setInterval(() => {
-        beat++
-        setDreadBeat(beat)
-      }, SCENE.dread.beatInterval)
-    }, SCENE.dread.start)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // START MY TURN - Barrel spins first (unless recently spun by respin or page reload)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const startMyTurn = useCallback(() => {
+    if (hasSpunThisTurn.current) return
+    hasSpunThisTurn.current = true
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ACT 4: THE MOMENT
-    // Result reveals - either devastating or relieving
-    // ─────────────────────────────────────────────────────────────────────────
-    schedule(() => {
-      // Stop the dread
-      stop('heartbeat')
-      if (heartbeatInterval.current) {
-        clearInterval(heartbeatInterval.current)
-        heartbeatInterval.current = null
+    clearTimeouts()
+    stopAll()
+    setChamberRevealed(false)
+    setRevealResult(null)
+    setActivelyMyTurn(true) // Lock: my turn is now in progress
+
+    // On page reload mid-game OR if barrel was just spun, skip directly to ready
+    // (we don't know if barrel was already spun before reload)
+    if (mountedDuringGame.current || recentlySpun.current) {
+      mountedDuringGame.current = false
+      recentlySpun.current = false
+      setPhase('ready')
+      setCountdown(30)
+      return
+    }
+
+    setPhase('spin')
+
+    // Spin barrel, then ready to pull
+    spinBarrel(TIMING.spinDuration, TIMING.spinRotations, () => {
+      setPhase('ready')
+      setCountdown(30)
+    })
+  }, [clearTimeouts, stopAll, spinBarrel, currentShooterIndex])
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PULL TRIGGER - The moment of truth
+  // ═══════════════════════════════════════════════════════════════════════════
+  const handlePullTrigger = useCallback(() => {
+    if (phase !== 'ready') return
+
+    setPhase('pulling')
+    play('cock')
+
+    // Hammer pulls back
+    hammerControls.start({
+      y: -16,
+      transition: {
+        duration: TIMING.cockDuration / 1000,
+        ease: [0.2, 0, 0.4, 1],
       }
+    })
+
+    // Notify server
+    onPullTrigger?.()
+
+    // Server will send result, handled in useEffect below
+  }, [phase, play, hammerControls, onPullTrigger])
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REVEAL RESULT
+  // ═══════════════════════════════════════════════════════════════════════════
+  const revealOutcome = useCallback((died: boolean, shooterSeat: number, isMyReveal: boolean) => {
+    clearTimeouts()
+    stop('heartbeat')
+
+    // Start tension sound during the suspense
+    play('heartbeat', { loop: true, volume: 0.8 })
+
+    // After suspense, reveal
+    schedule(() => {
+      stop('heartbeat')
+
+      // Compute which chamber is visually under the hammer RIGHT NOW
+      const chamber = getChamberUnderHammer()
+      setRevealChamberIndex(chamber)
+
+      setChamberRevealed(true)
+      setRevealResult(died ? 'bang' : 'click')
+      setPhase('reveal')
+
+      // Hammer falls
+      hammerControls.start({
+        y: 0,
+        transition: { duration: died ? 0.05 : 0.1 }
+      })
 
       if (died) {
-        // === BANG ===
-        setPhase('bang')
-        setResultType('bang')
-        setEliminatedSeat(latestRound?.shooterSeatIndex ?? currentShooterIndex)
-
-        // Muzzle flash
-        setShowMuzzleFlash(true)
-        schedule(() => setShowMuzzleFlash(false), SCENE.result.flashDuration)
-
-        // Hammer falls (fires)
-        hammerControls.start({
-          y: 0,
-          transition: { duration: 0.05, ease: 'easeIn' }
-        })
-
-        // Sound after tiny delay (flash first, then sound)
+        // BANG!
+        setEliminatedSeat(shooterSeat)
+        setShowFlash(true)
+        schedule(() => setShowFlash(false), TIMING.revealFlash)
         schedule(() => play('eliminated'), 30)
 
+        // After result display, reset (no respin for death)
+        schedule(() => {
+          setRevealResult(null)
+          setRevealChamberIndex(null)
+          setChamberRevealed(false)
+          setPhase('idle')
+          hasSpunThisTurn.current = false
+          recentlySpun.current = false // Clear so next player spins fresh
+          setActivelyMyTurn(false)
+          // Show death vignette ONLY after animation completes (if I died)
+          if (isMyReveal) {
+            setShowDeathVignette(true)
+          }
+          play('reload')
+        }, TIMING.revealDisplay + AUDIO.eliminated)
+
       } else {
-        // === CLICK ===
-        setPhase('click')
-        setResultType('click')
-
-        // Hammer falls with softer click
-        hammerControls.start({
-          y: 0,
-          transition: { duration: 0.1, ease: 'easeOut' }
-        })
-
-        // Relief glow
-        setShowReliefGlow(true)
-        schedule(() => setShowReliefGlow(false), 300)
-
+        // Click - survived!
         play('empty-click')
+
+        // After showing survival, RESPIN the barrel
+        schedule(() => {
+          setPhase('respin')
+          setRevealResult(null)
+          setRevealChamberIndex(null)
+
+          // Respin barrel (shorter spin)
+          spinBarrel(TIMING.respinDuration, TIMING.respinRotations, () => {
+            setChamberRevealed(false)
+            setPhase('idle')
+            hasSpunThisTurn.current = false
+            setActivelyMyTurn(false)
+            recentlySpun.current = true // Prevent next player from double-spinning
+            play('reload')
+          })
+        }, TIMING.revealDisplay)
       }
-    }, SCENE.dread.start + dreadDuration)
+    }, TIMING.suspenseAfterCock)
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ACT 5: RESET
-    // Prepare for next round
-    // ─────────────────────────────────────────────────────────────────────────
-    const resultSoundDuration = died ? AUDIO.eliminated : AUDIO.emptyClick
-    schedule(() => {
-      setPhase('reset')
-      setResultType(null)
-      setEliminatedSeat(null)
-      setCountdown(30)
-      play('reload')
+  }, [clearTimeouts, stop, play, hammerControls, schedule, spinBarrel, getChamberUnderHammer])
 
-      // After reload sound, return to idle
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SPECTATOR SEQUENCE - Watch someone else's turn
+  // ═══════════════════════════════════════════════════════════════════════════
+  const runSpectatorSequence = useCallback((died: boolean, shooterSeat: number) => {
+    // Guard against duplicate calls (network retries, etc.)
+    if (spectatorSequenceRunning.current) return
+    spectatorSequenceRunning.current = true
+
+    clearTimeouts()
+    stopAll()
+    setChamberRevealed(false)
+    setRevealResult(null)
+    hasSpunThisTurn.current = false
+
+    // Phase 1: Spin
+    setPhase('spin')
+    spinBarrel(TIMING.spinDuration, TIMING.spinRotations, () => {
+      // Phase 2: Show "pulling" state briefly
+      setPhase('pulling')
+      play('cock')
+
+      hammerControls.start({
+        y: -16,
+        transition: { duration: TIMING.cockDuration / 1000, ease: [0.2, 0, 0.4, 1] }
+      })
+
+      // Phase 3: Reveal after cock + suspense
       schedule(() => {
-        setPhase('idle')
-      }, AUDIO.reload)
-
-    }, SCENE.dread.start + dreadDuration + resultSoundDuration + SCENE.reset.delay)
-
-  }, [clearAllTimeouts, stopAll, play, stop, hammerControls, barrelControls, latestRound?.shooterSeatIndex, currentShooterIndex, schedule])
+        spectatorSequenceRunning.current = false // Allow next sequence
+        revealOutcome(died, shooterSeat, false) // false = not my reveal (spectating)
+      }, TIMING.cockDuration)
+    })
+  }, [clearTimeouts, stopAll, spinBarrel, play, hammerControls, schedule, revealOutcome])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HANDLE SERVER ROUND RESULTS
@@ -287,8 +343,9 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
   useEffect(() => {
     if (room.state !== 'PLAYING') {
       setPhase('idle')
-      clearAllTimeouts()
+      clearTimeouts()
       stopAll()
+      hasSpunThisTurn.current = false
       return
     }
 
@@ -296,73 +353,45 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
       lastProcessedRound.current = latestRound.index
       const wasMyTurn = latestRound.shooterSeatIndex === mySeat?.index
 
-      if (wasMyTurn) {
-        // I pulled - skip to result (already animating)
-        clearAllTimeouts()
-        stop('heartbeat')
-        if (heartbeatInterval.current) {
-          clearInterval(heartbeatInterval.current)
-          heartbeatInterval.current = null
-        }
-
-        if (latestRound.died) {
-          setPhase('bang')
-          setResultType('bang')
-          setEliminatedSeat(latestRound.shooterSeatIndex)
-          setShowMuzzleFlash(true)
-          schedule(() => setShowMuzzleFlash(false), SCENE.result.flashDuration)
-          hammerControls.start({ y: 0, transition: { duration: 0.05 } })
-          schedule(() => play('eliminated'), 30)
-        } else {
-          setPhase('click')
-          setResultType('click')
-          hammerControls.start({ y: 0, transition: { duration: 0.1 } })
-          setShowReliefGlow(true)
-          schedule(() => setShowReliefGlow(false), 300)
-          play('empty-click')
-        }
-
-        // Reset after result
-        const resultDuration = latestRound.died ? AUDIO.eliminated : AUDIO.emptyClick
-        schedule(() => {
-          setPhase('reset')
-          setResultType(null)
-          setEliminatedSeat(null)
-          play('reload')
-          schedule(() => setPhase('idle'), AUDIO.reload)
-        }, resultDuration + SCENE.reset.delay)
-
-      } else {
-        // Spectator - run full cinematic sequence
-        runSequence(latestRound.died, true)
+      if (wasMyTurn && phase === 'pulling') {
+        // I pulled the trigger, reveal my result
+        revealOutcome(latestRound.died, latestRound.shooterSeatIndex, true) // true = my reveal
+      } else if (!wasMyTurn) {
+        // Spectator - run the full sequence
+        runSpectatorSequence(latestRound.died, latestRound.shooterSeatIndex)
       }
     }
-  }, [room.state, latestRound, mySeat?.index, runSequence, clearAllTimeouts, stopAll, stop, play, hammerControls, schedule])
+  }, [room.state, latestRound, mySeat?.index, phase, revealOutcome, runSpectatorSequence, clearTimeouts, stopAll])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // TURN DETECTION
+  // TURN DETECTION - Start spin when it becomes my turn
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (room.state !== 'PLAYING') return
 
-    // Don't interrupt active sequences
-    if (['cock', 'spin', 'dread', 'bang', 'click', 'reset'].includes(phase)) return
+    // Don't interrupt active phases
+    if (['spin', 'pulling', 'reveal', 'respin'].includes(phase)) return
 
-    setPhase(isMyTurn ? 'ready' : 'idle')
-    setCountdown(30)
-  }, [room.state, isMyTurn, currentRound, currentTurnWallet, phase])
+    if (isMyTurn && phase === 'idle') {
+      startMyTurn()
+    } else if (!isMyTurn && phase === 'ready') {
+      // Turn changed away from me
+      setPhase('idle')
+      hasSpunThisTurn.current = false
+    }
+  }, [room.state, isMyTurn, phase, startMyTurn, currentShooterIndex])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // COUNTDOWN
+  // COUNTDOWN (only during ready phase)
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
-    if (!['ready', 'idle'].includes(phase)) return
+    if (phase !== 'ready') return
     if (room.state !== 'PLAYING') return
 
     const timer = setInterval(() => {
       setCountdown(prev => {
         if (prev <= 1) return 0
-        if (prev <= 10 && phase === 'ready') {
+        if (prev <= 10) {
           play('countdown', { volume: 0.4 })
         }
         return prev - 1
@@ -373,15 +402,28 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
   }, [phase, room.state, play])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // PULL TRIGGER HANDLER
+  // INITIALIZE DEATH STATE (for page refresh when already dead)
+  // Only sets vignette if NOT in an active turn (prevents early spoiler)
   // ═══════════════════════════════════════════════════════════════════════════
-  const handlePull = useCallback(() => {
-    if (phase !== 'ready') return
+  useEffect(() => {
+    // Don't spoil during active turn sequence
+    if (activelyMyTurn) return
+    if (phase !== 'idle') return
 
-    // Start the sequence - result will come from server
-    runSequence(false, false) // We don't know outcome yet, but sequence is same until result
-    onPullTrigger?.()
-  }, [phase, runSequence, onPullTrigger])
+    if (mySeat && !mySeat.alive && !showDeathVignette) {
+      setShowDeathVignette(true)
+    }
+  }, [mySeat, showDeathVignette, activelyMyTurn, phase])
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // UNMOUNT CLEANUP - Prevent setState-after-unmount and stray audio
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    return () => {
+      clearTimeouts()
+      stopAll()
+    }
+  }, [clearTimeouts, stopAll])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // MEMOIZED VALUES
@@ -397,14 +439,15 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
   )
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // RENDER
+  // RENDER HELPERS
   // ═══════════════════════════════════════════════════════════════════════════
-  const isDreadPhase = phase === 'dread'
-  const isActionPhase = ['cock', 'spin', 'dread'].includes(phase)
-  const isResultPhase = ['bang', 'click'].includes(phase)
+  const isSpinning = phase === 'spin' || phase === 'respin'
+  const showTriggerButton = phase === 'ready'
+  const isPulling = phase === 'pulling'
+  const isRevealing = phase === 'reveal'
 
   return (
-    <div className={`relative w-full max-w-xl mx-auto ${phase === 'bang' ? 'animate-shake' : ''}`}>
+    <div className={`relative w-full max-w-xl mx-auto ${revealResult === 'bang' ? 'animate-shake' : ''}`}>
 
       {/* ══════════════════════════════════════════════════════════════════════
           FULL-SCREEN OVERLAYS
@@ -412,7 +455,7 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
 
       {/* Muzzle Flash - BANG */}
       <AnimatePresence>
-        {showMuzzleFlash && (
+        {showFlash && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -428,40 +471,38 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
 
       {/* Relief Glow - CLICK */}
       <AnimatePresence>
-        {showReliefGlow && (
+        {revealResult === 'click' && (
           <motion.div
             initial={{ opacity: 0 }}
-            animate={{ opacity: 0.6 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-[100] pointer-events-none"
-            style={{
-              background: 'radial-gradient(circle at 50% 50%, rgba(34,197,94,0.4) 0%, transparent 60%)',
-            }}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Dread Vignette - pulses with heartbeat */}
-      <AnimatePresence>
-        {isDreadPhase && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{
-              opacity: dreadBeat % 2 === 0 ? 0.4 : 0.7,
-            }}
+            animate={{ opacity: 0.5 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-[60] pointer-events-none"
+            className="fixed inset-0 z-[90] pointer-events-none"
             style={{
-              background: 'radial-gradient(ellipse at 50% 50%, transparent 20%, rgba(80,0,0,0.5) 60%, rgba(40,0,0,0.85) 100%)',
+              background: 'radial-gradient(circle at 50% 50%, rgba(34,197,94,0.35) 0%, transparent 60%)',
             }}
           />
         )}
       </AnimatePresence>
 
-      {/* Dead player permanent vignette */}
-      {amIDead && (
+      {/* Tension vignette during pulling */}
+      <AnimatePresence>
+        {isPulling && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0.3, 0.6, 0.3] }}
+            exit={{ opacity: 0 }}
+            transition={{ repeat: Infinity, duration: 0.8 }}
+            className="fixed inset-0 z-[60] pointer-events-none"
+            style={{
+              background: 'radial-gradient(ellipse at 50% 50%, transparent 20%, rgba(80,0,0,0.4) 60%, rgba(40,0,0,0.7) 100%)',
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Dead player permanent vignette - only shows AFTER death reveal animation completes */}
+      {showDeathVignette && (
         <div
           className="absolute inset-0 z-40 pointer-events-none rounded-3xl overflow-hidden"
           style={{
@@ -480,7 +521,7 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
         <div className="flex justify-between items-center mb-6 px-2">
           <div className="text-center">
             <div className="text-[10px] font-mono text-ash/60 uppercase tracking-widest">Alive</div>
-            <div className={`text-3xl font-display ${isDreadPhase ? 'text-blood-light' : 'text-alive-light'} transition-colors duration-200`}>
+            <div className={`text-3xl font-display transition-colors duration-200 ${isPulling ? 'text-blood-light' : 'text-alive-light'}`}>
               {aliveCount}
             </div>
           </div>
@@ -493,7 +534,7 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
         </div>
 
         {/* ════════════════════════════════════════════════════════════════════
-            THE CHAMBER - Visual centerpiece
+            THE CHAMBER
             ════════════════════════════════════════════════════════════════════ */}
 
         <div className="relative aspect-square max-w-xs mx-auto">
@@ -504,41 +545,28 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
               <motion.div
                 key={i}
                 className="absolute rounded-full bg-gold/20"
-                style={{
-                  left: `${p.x}%`,
-                  top: `${p.y}%`,
-                  width: p.size,
-                  height: p.size,
-                }}
-                animate={{
-                  y: [0, -30, 0],
-                  opacity: [0, 0.5, 0],
-                }}
-                transition={{
-                  duration: p.duration,
-                  delay: p.delay,
-                  repeat: Infinity,
-                  ease: 'easeInOut',
-                }}
+                style={{ left: `${p.x}%`, top: `${p.y}%`, width: p.size, height: p.size }}
+                animate={{ y: [0, -30, 0], opacity: [0, 0.5, 0] }}
+                transition={{ duration: p.duration, delay: p.delay, repeat: Infinity, ease: 'easeInOut' }}
               />
             ))}
           </div>
 
-          {/* Outer glow - responsive to phase */}
+          {/* Outer glow */}
           <motion.div
             className="absolute -inset-6 rounded-full blur-3xl pointer-events-none"
             animate={{
-              background: isDreadPhase
-                ? dreadBeat % 2 === 0
-                  ? 'radial-gradient(circle, rgba(139,0,0,0.15) 0%, transparent 70%)'
-                  : 'radial-gradient(circle, rgba(139,0,0,0.35) 0%, transparent 70%)'
-                : phase === 'bang'
+              background: isSpinning
+                ? 'radial-gradient(circle, rgba(212,175,55,0.25) 0%, transparent 70%)'
+                : revealResult === 'bang'
                   ? 'radial-gradient(circle, rgba(255,100,0,0.4) 0%, transparent 70%)'
-                  : phase === 'click'
-                    ? 'radial-gradient(circle, rgba(34,197,94,0.3) 0%, transparent 70%)'
-                    : phase === 'ready'
+                  : revealResult === 'click'
+                    ? 'radial-gradient(circle, rgba(34,197,94,0.35) 0%, transparent 70%)'
+                    : showTriggerButton
                       ? 'radial-gradient(circle, rgba(212,175,55,0.2) 0%, transparent 70%)'
-                      : 'radial-gradient(circle, rgba(212,175,55,0.05) 0%, transparent 70%)'
+                      : isPulling
+                        ? 'radial-gradient(circle, rgba(139,0,0,0.2) 0%, transparent 70%)'
+                        : 'radial-gradient(circle, rgba(212,175,55,0.05) 0%, transparent 70%)'
             }}
             transition={{ duration: 0.2 }}
           />
@@ -562,14 +590,22 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
             {/* Center pin */}
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-gradient-to-br from-steel to-noir border border-edge/30 shadow-[inset_0_2px_8px_rgba(0,0,0,0.8)] z-10" />
 
-            {/* Chamber holes */}
+            {/* Chamber holes - all look NEUTRAL until revealed */}
             {[0, 1, 2, 3, 4, 5].map((i) => {
               const angle = (i * 60 - 90) * (Math.PI / 180)
               const radius = 38
               const x = 50 + radius * Math.cos(angle)
               const y = 50 + radius * Math.sin(angle)
-              const seatHere = room.seats.find(s => s.index === i)
-              const isDead = (seatHere && !seatHere.alive) || eliminatedSeat === i
+
+              // Only show loaded/empty state AFTER reveal
+              // revealChamberIndex is the chamber visually under the hammer at reveal time
+              const isRevealedChamber = revealChamberIndex !== null && i === revealChamberIndex
+              const justEliminated = eliminatedSeat !== null && revealResult === 'bang' && isRevealedChamber
+
+              // During spin/ready/pulling, chambers are mystery (dark)
+              // Only after reveal do we show the actual state AT THE HAMMER POSITION
+              const showAsLoaded = chamberRevealed && revealResult === 'bang' && isRevealedChamber
+              const showAsEmpty = chamberRevealed && revealResult === 'click' && isRevealedChamber
 
               return (
                 <div
@@ -577,27 +613,47 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                   className="absolute w-10 h-10 -translate-x-1/2 -translate-y-1/2"
                   style={{ left: `${x}%`, top: `${y}%` }}
                 >
-                  <div className={`
-                    w-full h-full rounded-full
-                    ${isDead
-                      ? 'bg-gradient-to-br from-blood/70 to-blood-dark shadow-[inset_0_0_15px_rgba(0,0,0,0.8),0_0_12px_rgba(139,0,0,0.6)]'
-                      : 'bg-gradient-to-br from-void to-noir shadow-[inset_0_0_20px_rgba(0,0,0,0.95)]'
-                    }
-                    border border-edge/30
-                  `}>
-                    {isDead && (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="w-2.5 h-2.5 rounded-full bg-blood-light/50" />
-                      </div>
+                  <motion.div
+                    className={`
+                      w-full h-full rounded-full border border-edge/30 transition-all duration-300
+                      ${showAsLoaded
+                        ? 'bg-gradient-to-br from-blood/80 to-blood-dark shadow-[inset_0_0_15px_rgba(0,0,0,0.8),0_0_15px_rgba(139,0,0,0.7)]'
+                        : showAsEmpty
+                          ? 'bg-gradient-to-br from-alive/30 to-alive-dark/50 shadow-[inset_0_0_15px_rgba(0,0,0,0.6),0_0_10px_rgba(34,197,94,0.4)]'
+                          : 'bg-gradient-to-br from-void to-noir shadow-[inset_0_0_20px_rgba(0,0,0,0.95)]'
+                      }
+                    `}
+                    animate={justEliminated ? { scale: [1, 1.2, 1] } : {}}
+                    transition={{ duration: 0.3 }}
+                  >
+                    {showAsLoaded && (
+                      <motion.div
+                        className="absolute inset-0 flex items-center justify-center"
+                        initial={{ scale: 0, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        <div className="w-3 h-3 rounded-full bg-blood-light/70 shadow-[0_0_8px_rgba(220,20,60,0.8)]" />
+                      </motion.div>
                     )}
-                  </div>
+                    {showAsEmpty && (
+                      <motion.div
+                        className="absolute inset-0 flex items-center justify-center"
+                        initial={{ scale: 0, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        <div className="w-2 h-2 rounded-full bg-alive-light/50" />
+                      </motion.div>
+                    )}
+                  </motion.div>
                 </div>
               )
             })}
           </motion.div>
 
           {/* ══════════════════════════════════════════════════════════════════
-              SEAT POSITION INDICATORS (fixed, outside barrel)
+              SEAT POSITION INDICATORS (fixed positions, just highlight current)
               ══════════════════════════════════════════════════════════════════ */}
           <div className="absolute inset-0 pointer-events-none">
             {[0, 1, 2, 3, 4, 5].map((i) => {
@@ -616,21 +672,14 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                   key={`indicator-${i}`}
                   className="absolute -translate-x-1/2 -translate-y-1/2"
                   style={{ left: `${x}%`, top: `${y}%` }}
-                  animate={
-                    isShooter && phase === 'ready'
-                      ? { scale: [1, 1.2, 1] }
-                      : isShooter && isDreadPhase
-                        ? { scale: dreadBeat % 2 === 0 ? 1 : 1.15 }
-                        : {}
-                  }
-                  transition={{
-                    repeat: phase === 'ready' ? Infinity : 0,
-                    duration: phase === 'ready' ? 1 : 0.2
+                  animate={{
+                    scale: isShooter && showTriggerButton ? [1, 1.15, 1] : 1
                   }}
+                  transition={{ repeat: showTriggerButton ? Infinity : 0, duration: 1 }}
                 >
                   <div className={`
                     w-7 h-7 rounded-full flex items-center justify-center
-                    text-[11px] font-mono font-bold transition-all duration-150
+                    text-[11px] font-mono font-bold transition-all duration-300
                     ${isDead
                       ? 'bg-blood/20 text-blood/40 border border-blood/20'
                       : isMe
@@ -653,13 +702,9 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
           </div>
 
           {/* ══════════════════════════════════════════════════════════════════
-              FIRING PIN / HAMMER
+              FIRING PIN / HAMMER (fixed at top - seats rotate instead)
               ══════════════════════════════════════════════════════════════════ */}
-          <motion.div
-            className="absolute inset-0 z-20 pointer-events-none"
-            animate={{ rotate: currentShooterIndex >= 0 ? currentShooterIndex * 60 : 0 }}
-            transition={{ duration: 0.35, ease: 'easeOut' }}
-          >
+          <div className="absolute inset-0 z-20 pointer-events-none">
             <div className="absolute -top-1 left-1/2 -translate-x-1/2">
               <motion.div
                 animate={hammerControls}
@@ -670,11 +715,9 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                 <motion.div
                   className="absolute -inset-2 rounded-full blur-md"
                   animate={{
-                    background: isDreadPhase
-                      ? dreadBeat % 2 === 0
-                        ? 'rgba(139,0,0,0.3)'
-                        : 'rgba(139,0,0,0.6)'
-                      : phase === 'ready'
+                    background: isPulling
+                      ? 'rgba(139,0,0,0.5)'
+                      : showTriggerButton
                         ? 'rgba(212,175,55,0.5)'
                         : 'rgba(212,175,55,0.15)'
                   }}
@@ -686,7 +729,7 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                 <div className="w-0 h-0 mx-auto border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[14px] border-t-gold-dark" />
               </motion.div>
             </div>
-          </motion.div>
+          </div>
 
         </div>
 
@@ -697,8 +740,8 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
         <div className="mt-8 text-center min-h-[160px]">
           <AnimatePresence mode="wait">
 
-            {/* IDLE - Watching */}
-            {phase === 'idle' && currentShooter && (
+            {/* IDLE - Watching someone else */}
+            {phase === 'idle' && currentShooter && !isMyTurn && (
               <motion.div
                 key="idle"
                 initial={{ opacity: 0, y: 15 }}
@@ -709,9 +752,7 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                 <div className="flex items-center justify-center gap-3">
                   <motion.div
                     className="w-9 h-9 rounded-full bg-ember/20 border border-ember/30 flex items-center justify-center"
-                    animate={{
-                      boxShadow: ['0 0 0 0 rgba(245,158,11,0.3)', '0 0 0 10px rgba(245,158,11,0)', '0 0 0 0 rgba(245,158,11,0)']
-                    }}
+                    animate={{ boxShadow: ['0 0 0 0 rgba(245,158,11,0.3)', '0 0 0 10px rgba(245,158,11,0)', '0 0 0 0 rgba(245,158,11,0)'] }}
                     transition={{ repeat: Infinity, duration: 2 }}
                   >
                     <span className="font-display text-ember">{currentShooterIndex + 1}</span>
@@ -723,18 +764,55 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center justify-center gap-2">
-                  <span className="text-ash/50 text-xs font-mono uppercase tracking-wider">watching</span>
-                  <span className={`px-3 py-1 rounded-full text-sm font-mono ${
-                    countdown <= 10 ? 'bg-blood/20 text-blood-light' : 'bg-smoke/30 text-ash/60'
-                  }`}>
-                    {countdown}s
-                  </span>
-                </div>
+                <span className="text-ash/50 text-xs font-mono uppercase tracking-wider">watching</span>
               </motion.div>
             )}
 
-            {/* READY - My turn */}
+            {/* SPIN - Barrel spinning (my turn starting) */}
+            {phase === 'spin' && isMyTurn && (
+              <motion.div
+                key="spin-mine"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="py-4 space-y-2"
+              >
+                <motion.p
+                  className="text-gold font-display text-2xl tracking-[0.3em]"
+                  animate={{ opacity: [1, 0.5, 1] }}
+                  transition={{ repeat: Infinity, duration: 0.15 }}
+                >
+                  SPINNING
+                </motion.p>
+                <p className="text-gold/60 text-xs font-mono uppercase tracking-wider">
+                  your fate is being decided...
+                </p>
+              </motion.div>
+            )}
+
+            {/* SPIN - Spectator watching someone else's spin */}
+            {phase === 'spin' && !isMyTurn && (
+              <motion.div
+                key="spin-spectator"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="py-4 space-y-2"
+              >
+                <motion.p
+                  className="text-gold font-display text-2xl tracking-[0.3em]"
+                  animate={{ opacity: [1, 0.5, 1] }}
+                  transition={{ repeat: Infinity, duration: 0.15 }}
+                >
+                  SPINNING
+                </motion.p>
+                <p className="text-gold/60 text-xs font-mono uppercase tracking-wider">
+                  seat {currentShooterIndex + 1}&apos;s fate spins...
+                </p>
+              </motion.div>
+            )}
+
+            {/* READY - Barrel stopped, can pull trigger */}
             {phase === 'ready' && (
               <motion.div
                 key="ready"
@@ -765,12 +843,12 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
                 </div>
 
                 <button
-                  onClick={handlePull}
+                  onClick={handlePullTrigger}
                   className="relative px-14 py-4 bg-gradient-to-b from-blood via-blood to-blood-dark border-2 border-blood-light/70 rounded-xl font-display text-xl tracking-[0.2em] text-chalk shadow-[0_0_30px_rgba(139,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.1)] hover:shadow-[0_0_50px_rgba(139,0,0,0.7)] hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
                 >
                   PULL TRIGGER
                   <motion.div
-                    className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -skew-x-12"
+                    className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -skew-x-12 rounded-xl overflow-hidden"
                     animate={{ x: ['-200%', '200%'] }}
                     transition={{ repeat: Infinity, duration: 2.5, ease: 'linear' }}
                   />
@@ -782,86 +860,39 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
               </motion.div>
             )}
 
-            {/* COCK - Hammer pulling back */}
-            {phase === 'cock' && (
+            {/* PULLING - Trigger pulled, tension building */}
+            {phase === 'pulling' && (
               <motion.div
-                key="cock"
+                key="pulling"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="py-6"
-              >
-                <motion.p
-                  className="text-ember font-mono uppercase tracking-[0.25em]"
-                  animate={{ opacity: [0.4, 1, 0.4] }}
-                  transition={{ repeat: Infinity, duration: 0.6 }}
-                >
-                  {isMyTurn ? 'cocking...' : `seat ${currentShooterIndex + 1} cocks...`}
-                </motion.p>
-              </motion.div>
-            )}
-
-            {/* SPIN - Barrel rotating */}
-            {phase === 'spin' && (
-              <motion.div
-                key="spin"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="py-4 space-y-2"
-              >
-                <motion.p
-                  className="text-gold font-display text-2xl tracking-[0.3em]"
-                  animate={{ opacity: [1, 0.4, 1] }}
-                  transition={{ repeat: Infinity, duration: 0.12 }}
-                >
-                  SPINNING
-                </motion.p>
-                <p className="text-gold/50 text-xs font-mono uppercase tracking-wider">
-                  {isMyTurn ? 'your fate spins...' : `seat ${currentShooterIndex + 1} spins...`}
-                </p>
-              </motion.div>
-            )}
-
-            {/* DREAD - Heartbeat tension */}
-            {phase === 'dread' && (
-              <motion.div
-                key="dread"
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.1 }}
                 className="py-4 space-y-3"
               >
-                {/* Heartbeat bars */}
+                <motion.p
+                  className="text-blood-light font-display text-2xl tracking-[0.2em]"
+                  animate={{ opacity: [0.5, 1, 0.5], scale: [1, 1.05, 1] }}
+                  transition={{ repeat: Infinity, duration: 0.6 }}
+                >
+                  {isMyTurn ? '...' : `SEAT ${currentShooterIndex + 1}...`}
+                </motion.p>
+
+                {/* Heartbeat visualization */}
                 <div className="flex items-center justify-center gap-1">
                   {[0, 1, 2, 3, 4].map((i) => (
                     <motion.div
                       key={i}
                       className="w-1.5 bg-blood-light rounded-full"
-                      animate={{
-                        height: dreadBeat % 2 === 0 ? 6 : 35,
-                        opacity: dreadBeat % 2 === 0 ? 0.4 : 1,
-                      }}
-                      transition={{ duration: 0.12, delay: i * 0.025 }}
+                      animate={{ height: ['6px', '30px', '6px'], opacity: [0.4, 1, 0.4] }}
+                      transition={{ repeat: Infinity, duration: 0.6, delay: i * 0.08 }}
                     />
                   ))}
                 </div>
-
-                <motion.p
-                  className="text-chalk/80 font-display text-4xl tracking-[0.4em]"
-                  animate={{
-                    scale: dreadBeat % 2 === 0 ? 1 : 1.15,
-                    opacity: dreadBeat % 2 === 0 ? 0.6 : 1,
-                  }}
-                  transition={{ duration: 0.12 }}
-                >
-                  . . .
-                </motion.p>
               </motion.div>
             )}
 
-            {/* BANG - Death */}
-            {phase === 'bang' && resultType === 'bang' && (
+            {/* REVEAL - BANG */}
+            {phase === 'reveal' && revealResult === 'bang' && (
               <motion.div
                 key="bang"
                 initial={{ opacity: 0, scale: 3 }}
@@ -888,8 +919,8 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
               </motion.div>
             )}
 
-            {/* CLICK - Survival */}
-            {phase === 'click' && resultType === 'click' && (
+            {/* REVEAL - CLICK */}
+            {phase === 'reveal' && revealResult === 'click' && (
               <motion.div
                 key="click"
                 initial={{ opacity: 0, scale: 0.5 }}
@@ -919,25 +950,32 @@ export function ChamberGame({ room, currentRound, myAddress, currentTurnWallet, 
               </motion.div>
             )}
 
-            {/* RESET */}
-            {phase === 'reset' && (
+            {/* RESPIN - After survival */}
+            {phase === 'respin' && (
               <motion.div
-                key="reset"
+                key="respin"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="py-6"
+                className="py-4 space-y-2"
               >
-                <p className="text-ash/60 font-mono text-sm uppercase tracking-wider">
-                  reloading chamber...
+                <motion.p
+                  className="text-alive font-display text-xl tracking-[0.2em]"
+                  animate={{ opacity: [1, 0.5, 1] }}
+                  transition={{ repeat: Infinity, duration: 0.2 }}
+                >
+                  RESPINNING
+                </motion.p>
+                <p className="text-ash/50 text-xs font-mono uppercase tracking-wider">
+                  chamber re-randomizing...
                 </p>
               </motion.div>
             )}
 
           </AnimatePresence>
 
-          {/* Dead player permanent message */}
-          {amIDead && !isActionPhase && !isResultPhase && phase !== 'reset' && (
+          {/* Dead player permanent message - only after reveal animation */}
+          {showDeathVignette && phase === 'idle' && (
             <motion.div
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}

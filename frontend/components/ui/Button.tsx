@@ -4,6 +4,7 @@
 'use client'
 
 import { forwardRef, ButtonHTMLAttributes } from 'react'
+import { useSound } from '../../hooks/useSound'
 
 type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost'
 type ButtonSize = 'sm' | 'md' | 'lg'
@@ -56,16 +57,24 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       disabled,
       children,
       className = '',
+      onClick,
       ...props
     },
     ref
   ) => {
+    const { play } = useSound()
     const isDisabled = disabled || loading
+
+    const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+      play('click')
+      onClick?.(e)
+    }
 
     return (
       <button
         ref={ref}
         disabled={isDisabled}
+        onClick={handleClick}
         className={`
           inline-flex items-center justify-center
           transition-all duration-200 ease-out
