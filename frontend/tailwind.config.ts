@@ -1,5 +1,5 @@
 // ABOUTME: Tailwind CSS configuration with design tokens
-// ABOUTME: Extends theme with Lucky Chamber noir casino color palette and animations
+// ABOUTME: Extends theme with Lucky Chamber noir color palette and animations
 
 import type { Config } from 'tailwindcss'
 
@@ -11,7 +11,7 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      // Color palette - Noir Casino
+      // Color palette - Noir
       colors: {
         // Primary - Burnished Gold
         gold: {

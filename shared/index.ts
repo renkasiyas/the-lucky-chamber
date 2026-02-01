@@ -73,6 +73,7 @@ export interface Room {
 export interface Seat {
   index: number
   walletAddress: string | null // Player's Kaspa address (for payouts/refunds)
+  depositAddress: string // Unique deposit address for this seat (derived from room+seat)
   depositTxId: string | null // Actual transaction ID from blockchain
   amount: number
   confirmed: boolean

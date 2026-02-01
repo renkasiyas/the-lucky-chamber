@@ -44,10 +44,11 @@ describe('KaspaClient', () => {
 
   describe('getUtxosByAddress', () => {
     it('should return UTXOs for an address', async () => {
+      // kaspa-wasm format: entries have amount directly (not nested in utxoEntry)
       mockRpcClient.getUtxosByAddresses.mockResolvedValueOnce({
         entries: [
-          { utxoEntry: { amount: '1000000000' }, outpoint: { transactionId: 'tx1', index: 0 } },
-          { utxoEntry: { amount: '500000000' }, outpoint: { transactionId: 'tx2', index: 1 } },
+          { amount: '1000000000', outpoint: { transactionId: 'tx1', index: 0 } },
+          { amount: '500000000', outpoint: { transactionId: 'tx2', index: 1 } },
         ],
       })
 
@@ -93,29 +94,35 @@ describe('KaspaClient', () => {
 
   describe('submitTransaction', () => {
     it('should submit a transaction and return tx ID', async () => {
-      mockRpcClient.submitTransaction.mockResolvedValueOnce({ transactionId: 'tx-hash-123' })
+      const mockTx = {
+        submit: vi.fn().mockResolvedValue('tx-hash-123'),
+      }
 
       await kaspaClient.initialize()
-      const txId = await kaspaClient.submitTransaction({ /* mock tx */ })
+      const txId = await kaspaClient.submitTransaction(mockTx)
 
       expect(txId).toBe('tx-hash-123')
+      expect(mockTx.submit).toHaveBeenCalledWith(mockRpcClient)
     })
 
     it('should handle string response format', async () => {
-      mockRpcClient.submitTransaction.mockResolvedValueOnce('tx-hash-string')
+      const mockTx = {
+        submit: vi.fn().mockResolvedValue('tx-hash-string'),
+      }
 
       await kaspaClient.initialize()
-      const txId = await kaspaClient.submitTransaction({})
+      const txId = await kaspaClient.submitTransaction(mockTx)
 
-      // Result depends on what was returned by the mock
       expect(typeof txId).toBe('string')
     })
 
     it('should throw on submission error', async () => {
-      mockRpcClient.submitTransaction.mockRejectedValueOnce(new Error('Submission failed'))
+      const mockTx = {
+        submit: vi.fn().mockRejectedValue(new Error('Submission failed')),
+      }
 
       await kaspaClient.initialize()
-      await expect(kaspaClient.submitTransaction({})).rejects.toThrow('Submission failed')
+      await expect(kaspaClient.submitTransaction(mockTx)).rejects.toThrow('Submission failed')
     })
   })
 

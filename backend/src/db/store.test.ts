@@ -101,7 +101,7 @@ describe('Store', () => {
     it('should update a seat in a room', () => {
       const room = createTestRoom()
       room.seats = [
-        { index: 0, walletAddress: 'kaspatest:wallet1', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+        { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
       ]
       store.createRoom(room)
 
@@ -200,7 +200,8 @@ describe('Store', () => {
         randomness: 'abc123',
         timestamp: Date.now(),
       }
-      expect(() => store.addRound('non-existent', round)).not.toThrow()
+      // SQLite enforces foreign key constraints - this should throw
+      expect(() => store.addRound('non-existent', round)).toThrow()
     })
 
     it('should append multiple rounds', () => {

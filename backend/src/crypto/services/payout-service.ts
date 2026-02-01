@@ -122,19 +122,19 @@ export class PayoutService {
     // Get room keypair
     const roomKeypair = walletManager.deriveRoomKeypair(roomId)
 
-    // Get ALL seats with wallet addresses (not just confirmed ones)
-    // This ensures refunds happen even if deposits arrived but weren't all confirmed
-    const seatsWithWallets = room.seats.filter(s => s.walletAddress)
-    if (seatsWithWallets.length === 0) {
-      logger.warn('No seats with wallets to refund', { roomId })
+    // Only refund seats that actually deposited (confirmed = deposit received)
+    // Players who joined but didn't deposit shouldn't get a share of the pot
+    const confirmedSeats = room.seats.filter(s => s.walletAddress && s.confirmed)
+    if (confirmedSeats.length === 0) {
+      logger.warn('No confirmed deposits to refund', { roomId })
       return []
     }
 
-    logger.info('Refunding seats with wallets', {
+    logger.info('Refunding confirmed depositors only', {
       roomId,
       totalSeats: room.seats.length,
-      seatsWithWallets: seatsWithWallets.length,
-      confirmedSeats: room.seats.filter(s => s.confirmed).length,
+      joinedSeats: room.seats.filter(s => s.walletAddress).length,
+      confirmedSeats: confirmedSeats.length,
       totalAmountSompi: totalAmount.toString()
     })
 
@@ -142,7 +142,7 @@ export class PayoutService {
     // With 6 outputs, transaction needs ~50,000-100,000 sompi for fees
     const FEE_BUFFER = 100000n // 100,000 sompi for fees (0.001 KAS)
     const availableForRefund = totalAmount > FEE_BUFFER ? totalAmount - FEE_BUFFER : 0n
-    const refundPerSeat = availableForRefund / BigInt(seatsWithWallets.length)
+    const refundPerSeat = availableForRefund / BigInt(confirmedSeats.length)
 
     if (refundPerSeat === 0n) {
       logger.warn('Insufficient funds for refunds after fees', { roomId, totalAmount: totalAmount.toString() })
@@ -151,7 +151,7 @@ export class PayoutService {
 
     // Build outputs - refund each player with a wallet address
     const outputs: any[] = []
-    for (const seat of seatsWithWallets) {
+    for (const seat of confirmedSeats) {
       outputs.push({
         address: new kaspaWasm.Address(seat.walletAddress!),
         amount: refundPerSeat

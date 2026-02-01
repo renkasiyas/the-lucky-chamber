@@ -5,7 +5,7 @@
 
 ## Brand + Product Feel
 
-**Vibe**: Dark, clean, high-contrast, "casino tension" without looking scammy.
+**Vibe**: Dark, clean, high-contrast, tension without looking scammy.
 **Promise**: Provably fair, transparent on-chain flow, fast feedback.
 **Tone**: Short, direct, slightly playful. No cringe.
 

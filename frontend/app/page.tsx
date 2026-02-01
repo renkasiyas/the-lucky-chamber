@@ -1,4 +1,4 @@
-// ABOUTME: Home page for The Lucky Chamber - Noir Casino aesthetic
+// ABOUTME: Home page for The Lucky Chamber - Noir aesthetic
 // ABOUTME: Entry point with dramatic hero, wallet connection, and game intro
 
 'use client'
@@ -137,7 +137,7 @@ export default function Home() {
               </svg>
               <p className="text-sm text-ash">
                 <span className="text-blood-light font-medium">Warning:</span>{' '}
-                This is gambling. Only play with funds you can afford to lose. 18+ only.
+                Only play with funds you can afford to lose. 18+ only.
               </p>
             </div>
           </div>

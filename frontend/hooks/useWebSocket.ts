@@ -13,7 +13,7 @@ interface UseWebSocketOptions {
 interface UseWebSocketReturn {
   connected: boolean
   send: (event: string, payload: unknown) => void
-  subscribe: (event: string, handler: (payload: unknown) => void) => () => void
+  subscribe: <T = unknown>(event: string, handler: (payload: T) => void) => () => void
 }
 
 export function useWebSocket(url: string, options?: UseWebSocketOptions): UseWebSocketReturn {
@@ -90,15 +90,15 @@ export function useWebSocket(url: string, options?: UseWebSocketOptions): UseWeb
     wsRef.current.send(message)
   }, [])
 
-  const subscribe = useCallback((event: string, handler: (payload: unknown) => void) => {
+  const subscribe = useCallback(<T = unknown>(event: string, handler: (payload: T) => void) => {
     const handlers = handlersRef.current.get(event) || new Set()
-    handlers.add(handler)
+    handlers.add(handler as (payload: unknown) => void)
     handlersRef.current.set(event, handlers)
 
     return () => {
       const currentHandlers = handlersRef.current.get(event)
       if (currentHandlers) {
-        currentHandlers.delete(handler)
+        currentHandlers.delete(handler as (payload: unknown) => void)
         if (currentHandlers.size === 0) {
           handlersRef.current.delete(event)
         }

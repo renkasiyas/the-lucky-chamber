@@ -3,6 +3,9 @@
 
 import { vi, beforeEach, afterEach } from 'vitest'
 
+// Use in-memory SQLite database for tests
+process.env.DB_PATH = ':memory:'
+
 // Reset all mocks before each test
 beforeEach(() => {
   vi.clearAllMocks()
