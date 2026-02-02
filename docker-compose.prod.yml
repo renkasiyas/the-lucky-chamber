@@ -1,6 +1,11 @@
 # ABOUTME: Docker Compose configuration for production environment
 # ABOUTME: Uses mainnet, bots disabled, production settings
 
+networks:
+  caddy_net:
+    external: true
+    name: caddy_caddy_net
+
 services:
   backend:
     build:
@@ -8,6 +13,9 @@ services:
       dockerfile: backend/Dockerfile
     ports:
       - "3001:3001"
+    networks:
+      - caddy_net
+      - default
     environment:
       - NODE_ENV=production
       - PORT=3001
@@ -39,6 +47,9 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+    networks:
+      - caddy_net
+      - default
     depends_on:
       backend:
         condition: service_healthy
