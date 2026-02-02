@@ -41,8 +41,8 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=https://dev.theluckychamber.com
-        - NEXT_PUBLIC_WS_URL=wss://dev.theluckychamber.com
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+        - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
     ports:
       - "3000:3000"
     environment:
