@@ -47,6 +47,9 @@ COPY --from=base /build/backend/package*.json ./
 # Copy built files (includes dist/backend and dist/shared)
 COPY --from=base /build/backend/dist/ ./dist/
 
+# Copy game config
+COPY --from=base /build/backend/config/ ./dist/backend/config/
+
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
