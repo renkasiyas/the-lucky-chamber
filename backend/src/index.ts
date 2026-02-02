@@ -125,7 +125,7 @@ async function main() {
 
   // Background tasks
   const CLEANUP_INTERVAL = 30000
-  setInterval(() => {
+  const cleanupInterval = setInterval(() => {
     roomManager.checkExpiredRooms()
     queueManager.clearExpiredEntries()
   }, CLEANUP_INTERVAL)
@@ -133,6 +133,7 @@ async function main() {
   // Graceful shutdown
   process.on('SIGTERM', () => {
     logger.info('SIGTERM received, shutting down gracefully')
+    clearInterval(cleanupInterval)
     depositMonitor.stop()
     httpServer.close(() => {
       logger.info('Server closed')

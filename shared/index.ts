@@ -57,6 +57,7 @@ export interface Room {
   minPlayers: number
   state: RoomState
   createdAt: number
+  updatedAt: number
   expiresAt: number
   depositAddress: string // Single address for all deposits
   lockHeight: number | null // Kaspa block height when locked
@@ -66,6 +67,7 @@ export interface Room {
   houseCutPercent: number
   payoutTxId: string | null
   refundTxIds?: string[] // Transaction IDs for refunds (when room aborted)
+  currentTurnSeatIndex: number | null // Whose turn during PLAYING state (null when not playing)
   seats: Seat[]
   rounds: Round[]
 }
@@ -77,6 +79,7 @@ export interface Seat {
   depositTxId: string | null // Actual transaction ID from blockchain
   amount: number
   confirmed: boolean
+  confirmedAt: number | null // Timestamp when deposit was confirmed (determines turn order)
   clientSeed: string | null
   alive: boolean
   knsName: string | null // KNS domain name (e.g. "player.kas")
@@ -243,3 +246,13 @@ export interface Config {
   houseCutPercent: number
   port: number
 }
+
+// ============================================================================
+// Blockchain Constants
+// ============================================================================
+
+/** Number of sompi per KAS (1 KAS = 100,000,000 sompi) */
+export const SOMPI_PER_KAS = 100_000_000
+
+// For bigint contexts (rare, e.g., kaspa-wasm):
+export const SOMPI_PER_KAS_BIGINT = 100_000_000n

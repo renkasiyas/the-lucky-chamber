@@ -7,14 +7,17 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useKasware } from '../../hooks/useKasware'
 import { useWebSocket } from '../../hooks/useWebSocket'
+import { useSound } from '../../hooks/useSound'
 import { Button } from '../../components/ui/Button'
 import { Card, CardContent } from '../../components/ui/Card'
 import { useToast } from '../../components/ui/Toast'
 import { formatKAS, formatKASPrecise } from '../../lib/format'
+import appConfig from '../../lib/config'
 
 type LobbyTab = 'quickmatch' | 'custom'
 
 interface GameConfig {
+  houseCutPercent: number
   quickMatch: {
     enabled: boolean
     seatPrice: number
@@ -48,16 +51,15 @@ export default function LobbyPage() {
   const [inQueue, setInQueue] = useState(false)
   const [botStatus, setBotStatus] = useState<{ enabled: boolean; canEnable: boolean; botCount: number } | null>(null)
   const toast = useToast()
+  const { play } = useSound()
 
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:4002'
-  const ws = useWebSocket(wsUrl)
+  const ws = useWebSocket(appConfig.ws.url)
 
   // Fetch game config
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4001'
-        const response = await fetch(`${apiUrl}/api/config`)
+        const response = await fetch(`${appConfig.api.baseUrl}/api/config`)
         if (response.ok) {
           const data = await response.json()
           setConfig(data)
@@ -79,8 +81,7 @@ export default function LobbyPage() {
   useEffect(() => {
     const fetchBotStatus = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4001'
-        const response = await fetch(`${apiUrl}/api/bots/status`)
+        const response = await fetch(`${appConfig.api.baseUrl}/api/bots/status`)
         if (response.ok) {
           const data = await response.json()
           setBotStatus(data)
@@ -95,8 +96,7 @@ export default function LobbyPage() {
   const toggleBots = async () => {
     if (!botStatus?.canEnable) return
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4001'
-      const response = await fetch(`${apiUrl}/api/bots/toggle`, {
+      const response = await fetch(`${appConfig.api.baseUrl}/api/bots/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !botStatus.enabled }),
@@ -168,8 +168,7 @@ export default function LobbyPage() {
 
     try {
       setLoading(true)
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4001'
-      const response = await fetch(`${apiUrl}/api/rooms`, {
+      const response = await fetch(`${appConfig.api.baseUrl}/api/rooms`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode, seatPrice }),
@@ -270,7 +269,7 @@ export default function LobbyPage() {
         {/* Tab Selector */}
         <div className="flex gap-1 p-1.5 bg-noir border border-edge rounded-xl animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
           <button
-            onClick={() => config?.quickMatch.enabled && setActiveTab('quickmatch')}
+            onClick={() => { play('click'); config?.quickMatch.enabled && setActiveTab('quickmatch') }}
             disabled={!config?.quickMatch.enabled}
             className={`flex-1 py-3 px-4 rounded-lg font-display tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
               !config?.quickMatch.enabled
@@ -283,7 +282,7 @@ export default function LobbyPage() {
             QUICK MATCH
           </button>
           <button
-            onClick={() => setActiveTab('custom')}
+            onClick={() => { play('click'); setActiveTab('custom') }}
             className={`flex-1 py-3 px-4 rounded-lg font-display tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
               activeTab === 'custom'
                 ? 'bg-gradient-to-r from-gold to-gold-dark text-void shadow-gold'
@@ -327,7 +326,7 @@ export default function LobbyPage() {
                 <div className="bg-smoke/50 border border-edge p-4 rounded-xl text-center">
                   <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Win</span>
                   <span className="font-display text-2xl text-alive-light">
-                    {formatKASPrecise((config.quickMatch.seatPrice * config.quickMatch.minPlayers * 0.95) / (config.quickMatch.minPlayers - 1), 2)}
+                    {formatKASPrecise((config.quickMatch.seatPrice * config.quickMatch.minPlayers * ((100 - config.houseCutPercent) / 100)) / (config.quickMatch.minPlayers - 1), 2)}
                   </span>
                   <span className="text-xs text-ash ml-1">KAS</span>
                 </div>
@@ -368,7 +367,7 @@ export default function LobbyPage() {
               {botStatus?.canEnable && (
                 <div className="border-t border-edge pt-4 mt-2">
                   <button
-                    onClick={toggleBots}
+                    onClick={() => { play('click'); toggleBots() }}
                     className="w-full flex items-center justify-between p-3 bg-smoke/30 border border-edge hover:border-edge-light rounded-lg transition-colors group"
                   >
                     <div className="flex items-center gap-3">
@@ -422,7 +421,7 @@ export default function LobbyPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {/* Regular Mode */}
                   <button
-                    onClick={() => setCustomMode('REGULAR')}
+                    onClick={() => { play('click'); setCustomMode('REGULAR') }}
                     disabled={!config?.modes.REGULAR.enabled}
                     className={`group relative p-5 rounded-xl border-2 transition-all text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-noir ${
                       !config?.modes.REGULAR.enabled
@@ -458,7 +457,7 @@ export default function LobbyPage() {
 
                   {/* Extreme Mode */}
                   <button
-                    onClick={() => config?.modes.EXTREME.enabled && setCustomMode('EXTREME')}
+                    onClick={() => { play('click'); config?.modes.EXTREME.enabled && setCustomMode('EXTREME') }}
                     disabled={!config?.modes.EXTREME.enabled}
                     className={`relative p-5 rounded-xl border-2 transition-all text-left ${
                       !config?.modes.EXTREME.enabled
@@ -528,7 +527,7 @@ export default function LobbyPage() {
                   <span className="text-xs font-mono text-ember uppercase tracking-wider">Survivor Share</span>
                   <div className="flex items-baseline gap-2">
                     <span className="font-display text-xl text-alive-light">
-                      {formatKAS(((parseFloat(customPrice) || 0) * maxPlayers * 0.95) / (maxPlayers - 1), 1)}
+                      {formatKAS(((parseFloat(customPrice) || 0) * maxPlayers * ((100 - (config?.houseCutPercent ?? 5)) / 100)) / (maxPlayers - 1), 1)}
                     </span>
                     <span className="text-sm text-ash">KAS each</span>
                   </div>

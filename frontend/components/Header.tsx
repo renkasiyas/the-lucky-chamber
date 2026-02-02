@@ -8,15 +8,17 @@ import { useRouter } from 'next/navigation'
 import { useKasware } from '../hooks/useKasware'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useKNS } from '../hooks/useKNS'
+import { useSound } from '../hooks/useSound'
 import { useToast } from './ui/Toast'
 import { Button } from './ui/Button'
 import { formatAddress, formatBalance } from '../lib/format'
+import config from '../lib/config'
 
 export function Header() {
   const router = useRouter()
   const [liveUsers, setLiveUsers] = useState(0)
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:4002'
-  const ws = useWebSocket(wsUrl)
+  const ws = useWebSocket(config.ws.url)
+  const { play } = useSound()
 
   useEffect(() => {
     if (!ws.connected) return
@@ -60,7 +62,7 @@ export function Header() {
           {/* Logo / Title */}
           <div className="flex items-center gap-4">
             <button
-              onClick={() => router.push('/lobby')}
+              onClick={() => { play('click'); router.push('/lobby') }}
               className="flex items-center gap-2 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold rounded-lg"
             >
               {/* Chamber icon */}
@@ -108,7 +110,7 @@ export function Header() {
                       </span>
                       <span className="text-xs text-ash">KAS</span>
                       <button
-                        onClick={() => refreshBalance()}
+                        onClick={() => { play('click'); refreshBalance() }}
                         className="text-xs text-ember hover:text-gold transition-colors ml-1"
                         title="Refresh balance"
                         aria-label="Refresh balance"

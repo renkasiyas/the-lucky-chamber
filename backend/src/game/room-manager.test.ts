@@ -106,6 +106,7 @@ describe('RoomManager', () => {
     minPlayers: 2,
     state: RoomState.LOBBY,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     expiresAt: Date.now() + 300000,
     depositAddress: 'kaspatest:deposit123',
     lockHeight: null,
@@ -114,6 +115,7 @@ describe('RoomManager', () => {
     serverSeed: null,
     houseCutPercent: 5,
     payoutTxId: null,
+      currentTurnSeatIndex: null,
     seats: [],
     rounds: [],
     ...overrides,
@@ -183,8 +185,8 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         maxPlayers: 2,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:w1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:w2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:w1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:w2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -195,7 +197,7 @@ describe('RoomManager', () => {
     it('should throw if wallet already in room', () => {
       const mockRoom = createMockRoom({
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -232,7 +234,7 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.LOBBY,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -248,7 +250,7 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.FUNDING,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -262,8 +264,8 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.PLAYING,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -291,7 +293,7 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.SETTLED,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -305,7 +307,7 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.FUNDING,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -346,7 +348,7 @@ describe('RoomManager', () => {
     it('should set client seed on seat', () => {
       const mockRoom = createMockRoom({
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -655,8 +657,8 @@ describe('RoomManager', () => {
     it('should return error if not player turn', () => {
       const mockRoom = createMockRoom({
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -677,7 +679,7 @@ describe('RoomManager', () => {
     it('should succeed when correct player pulls trigger', () => {
       const mockRoom = createMockRoom({
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -714,7 +716,7 @@ describe('RoomManager', () => {
     it('should return current shooter info', () => {
       const mockRoom = createMockRoom({
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -754,8 +756,8 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.PLAYING,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: false, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: false, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -770,8 +772,8 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.PLAYING,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -793,7 +795,7 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.PLAYING,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -815,8 +817,8 @@ describe('RoomManager', () => {
       const mockRoom = createMockRoom({
         state: RoomState.LOBBY,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -835,8 +837,8 @@ describe('RoomManager', () => {
         state: RoomState.FUNDING,
         minPlayers: 2,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -857,8 +859,8 @@ describe('RoomManager', () => {
         state: RoomState.FUNDING,
         minPlayers: 3,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -874,8 +876,8 @@ describe('RoomManager', () => {
         state: RoomState.FUNDING,
         minPlayers: 2,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)
@@ -903,8 +905,8 @@ describe('RoomManager', () => {
         lockHeight: 1000,
         settlementBlockHeight: 1010,
         seats: [
-          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, clientSeed: 'seed1', alive: true, knsName: null, avatarUrl: null },
-          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: 'tx2', amount: 10, confirmed: true, clientSeed: 'seed2', alive: true, knsName: null, avatarUrl: null },
+          { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: 'tx1', amount: 10, confirmed: true, confirmedAt: null, clientSeed: 'seed1', alive: true, knsName: null, avatarUrl: null },
+          { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: 'tx2', amount: 10, confirmed: true, confirmedAt: null, clientSeed: 'seed2', alive: true, knsName: null, avatarUrl: null },
         ],
       })
       vi.mocked(store.getRoom).mockReturnValue(mockRoom)

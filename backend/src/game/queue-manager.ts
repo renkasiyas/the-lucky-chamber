@@ -1,28 +1,10 @@
 // ABOUTME: Quick-match queue system for auto-matching players
 // ABOUTME: Manages queues per game mode/seat price tier and auto-creates rooms when enough players join
 
-import { readFileSync } from 'fs'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
 import { GameMode, GameConfig } from '../../../shared/index.js'
 import { roomManager } from './room-manager.js'
 import { logger } from '../utils/logger.js'
-
-const __dirname = dirname(fileURLToPath(import.meta.url))
-
-// Load game config for quick match settings
-function loadGameConfig() {
-  try {
-    const configPath = join(__dirname, '../../config/game-config.json')
-    return JSON.parse(readFileSync(configPath, 'utf-8'))
-  } catch (err) {
-    logger.warn('Failed to load game config, using defaults', { error: err })
-    return {
-      quickMatch: { minPlayers: 2, maxPlayers: 6 },
-      customRoom: { minPlayers: 2, maxPlayers: 6 }
-    }
-  }
-}
+import { getGameConfig } from '../config/game-config.js'
 
 interface QueueEntry {
   walletAddress: string
@@ -43,6 +25,7 @@ export class QueueManager {
   private queues: Map<string, QueueEntry[]> = new Map()
   private onRoomCreated: RoomCreatedCallback | null = null
   private onQueueUpdate: QueueUpdateCallback | null = null
+  private creatingRoom = new Set<string>()
 
   /**
    * Set callback for when a room is created from queue
@@ -146,68 +129,82 @@ export class QueueManager {
    * Try to create a room if enough players in queue
    */
   private tryCreateRoom(queueKey: string): void {
-    const queue = this.queues.get(queueKey)
-    if (!queue) return
+    if (this.creatingRoom.has(queueKey)) return  // Already creating
+    this.creatingRoom.add(queueKey)
 
-    const [modeStr, priceStr] = queueKey.split(':')
-    const mode = modeStr as GameMode
-    const seatPrice = parseFloat(priceStr)
+    try {
+      const queue = this.queues.get(queueKey)
+      if (!queue) return
 
-    // Load config to get minPlayers for quick match
-    const config = loadGameConfig()
-    const minPlayers = config.quickMatch?.minPlayers || 2
+      const [modeStr, priceStr] = queueKey.split(':')
+      const mode = modeStr as GameMode
+      const seatPrice = parseFloat(priceStr)
 
-    // Check if we have enough players to start a match
-    if (queue.length >= minPlayers) {
-      logger.info('Creating room from queue', { queueKey, queueLength: queue.length, minPlayers })
+      // Load config to get minPlayers for quick match
+      const config = getGameConfig()
+      const minPlayers = config.quickMatch?.minPlayers || 2
 
-      // Take the minimum number of players for a match
-      const players = queue.splice(0, minPlayers)
-      this.queues.set(queueKey, queue)
+      // Check if we have enough players to start a match
+      if (queue.length >= minPlayers) {
+        logger.info('Creating room from queue', { queueKey, queueLength: queue.length, minPlayers })
 
-      // Create room
-      let room
-      try {
-        room = roomManager.createRoom(mode, mode === GameMode.REGULAR ? seatPrice : undefined)
-      } catch (err: any) {
-        logger.error('Failed to create room from queue', { queueKey, error: err?.message || String(err) })
-        // Return players to queue
-        const currentQueue = this.queues.get(queueKey) || []
-        this.queues.set(queueKey, [...players, ...currentQueue])
-        return
-      }
+        // Take the minimum number of players for a match
+        const players = queue.splice(0, minPlayers)
+        this.queues.set(queueKey, queue)
 
-      // Add all players to room, track failures
-      const failedPlayers: typeof players = []
-      players.forEach((player) => {
-        try {
-          roomManager.joinRoom(room.id, player.walletAddress)
-        } catch (err) {
-          logger.error(`Failed to add player to auto-created room`, { err, walletAddress: player.walletAddress, roomId: room.id })
-          failedPlayers.push(player)
+        // Shuffle players before adding to room for random seat assignment
+        // This ensures seat indices are distributed randomly, not by queue order
+        for (let i = players.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[players[i], players[j]] = [players[j], players[i]]
         }
-      })
 
-      // Return failed players to queue so they can try again
-      if (failedPlayers.length > 0) {
-        const currentQueue = this.queues.get(queueKey) || []
-        this.queues.set(queueKey, [...failedPlayers, ...currentQueue])
-        logger.warn(`Returned ${failedPlayers.length} players to queue after join failure`, { queueKey })
+        // Create room
+        let room
+        try {
+          room = roomManager.createRoom(mode, mode === GameMode.REGULAR ? seatPrice : undefined)
+        } catch (err: any) {
+          logger.error('Failed to create room from queue', { queueKey, error: err?.message || String(err) })
+          // Return players to queue
+          const currentQueue = this.queues.get(queueKey) || []
+          this.queues.set(queueKey, [...players, ...currentQueue])
+          return
+        }
+
+        // Add all players to room, track failures
+        const failedPlayers: typeof players = []
+        players.forEach((player) => {
+          try {
+            roomManager.joinRoom(room.id, player.walletAddress)
+          } catch (err) {
+            logger.error(`Failed to add player to auto-created room`, { err, walletAddress: player.walletAddress, roomId: room.id })
+            failedPlayers.push(player)
+          }
+        })
+
+        // Return failed players to queue so they can try again
+        if (failedPlayers.length > 0) {
+          const currentQueue = this.queues.get(queueKey) || []
+          this.queues.set(queueKey, [...failedPlayers, ...currentQueue])
+          logger.warn(`Returned ${failedPlayers.length} players to queue after join failure`, { queueKey })
+        }
+
+        // Get successful players
+        const successfulPlayers = players.filter(p => !failedPlayers.includes(p))
+        const successfulAddresses = successfulPlayers.map(p => p.walletAddress)
+
+        logger.info(`Auto-created room from queue`, { roomId: room.id, queueKey, playerCount: successfulAddresses.length })
+
+        // Notify about room creation
+        if (this.onRoomCreated && successfulAddresses.length > 0) {
+          this.onRoomCreated(room.id, successfulAddresses)
+        }
+
+        // Emit queue update after room creation
+        this.emitQueueUpdate(queueKey)
       }
-
-      // Get successful players
-      const successfulPlayers = players.filter(p => !failedPlayers.includes(p))
-      const successfulAddresses = successfulPlayers.map(p => p.walletAddress)
-
-      logger.info(`Auto-created room from queue`, { roomId: room.id, queueKey, playerCount: successfulAddresses.length })
-
-      // Notify about room creation
-      if (this.onRoomCreated && successfulAddresses.length > 0) {
-        this.onRoomCreated(room.id, successfulAddresses)
-      }
-
-      // Emit queue update after room creation
-      this.emitQueueUpdate(queueKey)
+    } finally {
+      this.creatingRoom.delete(queueKey)
     }
   }
 

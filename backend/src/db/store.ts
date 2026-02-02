@@ -53,17 +53,17 @@ class Store {
       INSERT INTO rooms (
         id, mode, state, seat_price, max_players, min_players, house_cut_percent,
         deposit_address, server_commit, server_seed, lock_height, settlement_block_height,
-        payout_tx_id, created_at, expires_at, updated_at
+        payout_tx_id, current_turn_seat_index, created_at, expires_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const insertSeat = db.prepare(`
       INSERT INTO seats (
         room_id, seat_index, wallet_address, deposit_address, deposit_tx_id, amount, confirmed,
-        client_seed, alive, kns_name, avatar_url
+        confirmed_at, client_seed, alive, kns_name, avatar_url
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const transaction = db.transaction(() => {
@@ -81,6 +81,7 @@ class Store {
         room.lockHeight || null,
         room.settlementBlockHeight || null,
         room.payoutTxId || null,
+        room.currentTurnSeatIndex ?? null,
         room.createdAt,
         room.expiresAt,
         now
@@ -95,6 +96,7 @@ class Store {
           seat.depositTxId || null,
           seat.amount || 0,
           seat.confirmed ? 1 : 0,
+          seat.confirmedAt || null,
           seat.clientSeed || null,
           seat.alive ? 1 : 0,
           seat.knsName || null,
@@ -138,6 +140,10 @@ class Store {
       fields.push('refund_tx_ids = ?')
       values.push(updates.refundTxIds ? JSON.stringify(updates.refundTxIds) : null)
     }
+    if (updates.currentTurnSeatIndex !== undefined) {
+      fields.push('current_turn_seat_index = ?')
+      values.push(updates.currentTurnSeatIndex)
+    }
 
     if (fields.length === 0) return
 
@@ -156,9 +162,9 @@ class Store {
     db.prepare(`
       INSERT INTO seats (
         room_id, seat_index, wallet_address, deposit_address, deposit_tx_id, amount, confirmed,
-        client_seed, alive, kns_name, avatar_url
+        confirmed_at, client_seed, alive, kns_name, avatar_url
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       roomId,
       seat.index,
@@ -167,6 +173,7 @@ class Store {
       seat.depositTxId || null,
       seat.amount || 0,
       seat.confirmed ? 1 : 0,
+      seat.confirmedAt || null,
       seat.clientSeed || null,
       seat.alive ? 1 : 0,
       seat.knsName || null,
@@ -218,6 +225,10 @@ class Store {
     if (updates.confirmed !== undefined) {
       fields.push('confirmed = ?')
       values.push(updates.confirmed ? 1 : 0)
+    }
+    if (updates.confirmedAt !== undefined) {
+      fields.push('confirmed_at = ?')
+      values.push(updates.confirmedAt)
     }
     if (updates.alive !== undefined) {
       fields.push('alive = ?')
@@ -333,6 +344,85 @@ class Store {
   }
 
   /**
+   * Record a refund (linked to original deposit)
+   */
+  createRefund(refund: {
+    roomId: string
+    seatIndex: number
+    depositAddress: string
+    walletAddress: string
+    depositTxId: string | null
+    refundTxId: string
+    amount: number
+  }): void {
+    db.prepare(`
+      INSERT INTO refunds (room_id, seat_index, deposit_address, wallet_address, deposit_tx_id, refund_tx_id, amount, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      refund.roomId,
+      refund.seatIndex,
+      refund.depositAddress,
+      refund.walletAddress,
+      refund.depositTxId,
+      refund.refundTxId,
+      refund.amount,
+      Date.now()
+    )
+  }
+
+  /**
+   * Get refunds for a room
+   */
+  getRefunds(roomId: string): Array<{
+    roomId: string
+    seatIndex: number
+    depositAddress: string
+    walletAddress: string
+    depositTxId: string | null
+    refundTxId: string
+    amount: number
+    createdAt: number
+  }> {
+    const rows = db.prepare('SELECT * FROM refunds WHERE room_id = ?').all(roomId) as any[]
+    return rows.map(row => ({
+      roomId: row.room_id,
+      seatIndex: row.seat_index,
+      depositAddress: row.deposit_address,
+      walletAddress: row.wallet_address,
+      depositTxId: row.deposit_tx_id || null,
+      refundTxId: row.refund_tx_id,
+      amount: row.amount,
+      createdAt: row.created_at
+    }))
+  }
+
+  /**
+   * Get all refunds for a wallet address
+   */
+  getRefundsByWallet(walletAddress: string): Array<{
+    roomId: string
+    seatIndex: number
+    depositAddress: string
+    walletAddress: string
+    depositTxId: string | null
+    refundTxId: string
+    amount: number
+    createdAt: number
+  }> {
+    const rows = db.prepare('SELECT * FROM refunds WHERE wallet_address = ?').all(walletAddress) as any[]
+    return rows.map(row => ({
+      roomId: row.room_id,
+      seatIndex: row.seat_index,
+      depositAddress: row.deposit_address,
+      walletAddress: row.wallet_address,
+      depositTxId: row.deposit_tx_id || null,
+      refundTxId: row.refund_tx_id,
+      amount: row.amount,
+      createdAt: row.created_at
+    }))
+  }
+
+  /**
    * Convert database rows to Room object
    */
   private rowToRoom(roomRow: any, seatRows: any[], roundRows: any[]): Room {
@@ -351,7 +441,9 @@ class Store {
       settlementBlockHeight: roomRow.settlement_block_height || null,
       payoutTxId: roomRow.payout_tx_id || null,
       refundTxIds: roomRow.refund_tx_ids ? JSON.parse(roomRow.refund_tx_ids) : undefined,
+      currentTurnSeatIndex: roomRow.current_turn_seat_index ?? null,
       createdAt: roomRow.created_at,
+      updatedAt: roomRow.updated_at,
       expiresAt: roomRow.expires_at,
       seats: seatRows.map(seat => ({
         index: seat.seat_index,
@@ -360,6 +452,7 @@ class Store {
         depositTxId: seat.deposit_tx_id || null,
         amount: seat.amount || 0,
         confirmed: !!seat.confirmed,
+        confirmedAt: seat.confirmed_at || null,
         clientSeed: seat.client_seed || null,
         alive: !!seat.alive,
         knsName: seat.kns_name || null,

@@ -1,6 +1,7 @@
 // ABOUTME: Deposit monitoring service - polls blockchain for incoming deposits
 // ABOUTME: Uses callback pattern to avoid circular dependency with room-manager
 
+import { SOMPI_PER_KAS } from '../../../../shared/index.js'
 import { store } from '../../db/store.js'
 import { kaspaClient } from '../kaspa-client.js'
 import { logger } from '../../utils/logger.js'
@@ -98,7 +99,7 @@ export class DepositMonitor {
         seatPrice: room.seatPrice
       })
 
-      const seatPriceSompi = BigInt(Math.floor(room.seatPrice * 100_000_000))
+      const seatPriceSompi = BigInt(Math.floor(room.seatPrice * SOMPI_PER_KAS))
 
       // Check each unconfirmed seat's unique deposit address
       for (const seat of unconfirmedSeats) {
@@ -118,7 +119,7 @@ export class DepositMonitor {
         if (totalAmount >= seatPriceSompi) {
           // Use the first UTXO's transaction ID as the deposit tx
           const txId = utxos.length > 0 ? utxos[0].outpoint.transactionId : `deposit_${room.id}_${seat.index}`
-          const amountKas = Number(totalAmount) / 100_000_000
+          const amountKas = Number(totalAmount) / SOMPI_PER_KAS
 
           this.depositConfirmer.confirmDeposit(room.id, seat.index, txId, amountKas)
 

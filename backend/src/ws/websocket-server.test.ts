@@ -36,6 +36,10 @@ vi.mock('../utils/logger.js', () => ({
   },
 }))
 
+vi.mock('../middleware/rate-limit.js', () => ({
+  checkWsRateLimit: vi.fn().mockReturnValue(true),
+}))
+
 describe('WSServer', () => {
   let wsServer: WSServer
   let port: number
@@ -49,6 +53,7 @@ describe('WSServer', () => {
     minPlayers: 2,
     state: RoomState.LOBBY,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     expiresAt: Date.now() + 300000,
     depositAddress: 'kaspatest:deposit123',
     lockHeight: null,
@@ -57,6 +62,7 @@ describe('WSServer', () => {
     serverSeed: null,
     houseCutPercent: 5,
     payoutTxId: null,
+      currentTurnSeatIndex: null,
     seats: [],
     rounds: [],
   })
@@ -99,7 +105,7 @@ describe('WSServer', () => {
     vi.mocked(roomManager.getRoom).mockImplementation((id) => mockRooms.get(id))
     vi.mocked(roomManager.getAllRooms).mockImplementation(() => Array.from(mockRooms.values()))
     vi.mocked(roomManager.joinRoom).mockReturnValue({
-      seat: { index: 0, walletAddress: '', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      seat: { index: 0, walletAddress: '', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
       depositAddress: 'kaspatest:addr',
     })
 
@@ -116,26 +122,48 @@ describe('WSServer', () => {
     it('should accept WebSocket connections', async () => {
       const { ws } = await connectAndCapture()
 
-      expect(wsServer.getConnectionCount()).toBe(1)
+      // Raw connections are tracked, but getConnectionCount only counts authenticated users
+      expect(wsServer.getRawConnectionCount()).toBe(1)
 
       ws.close()
       await new Promise(resolve => setTimeout(resolve, 50))
 
-      expect(wsServer.getConnectionCount()).toBe(0)
+      expect(wsServer.getRawConnectionCount()).toBe(0)
     })
 
-    it('should track connection count', async () => {
-      // Simply verify getConnectionCount works after connecting
+    it('should track connection count for authenticated users', async () => {
+      // Connection count only tracks authenticated users (those who joined a room)
+      mockRooms.set('test-room', createMockRoom('test-room'))
       const { ws } = await connectAndCapture()
+
+      // Authenticate by joining a room
+      ws.send(JSON.stringify({
+        event: WSEvent.JOIN_ROOM,
+        payload: { roomId: 'test-room', walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
 
       expect(wsServer.getConnectionCount()).toBeGreaterThanOrEqual(1)
 
       ws.close()
     })
 
-    it('should handle multiple connections', async () => {
+    it('should handle multiple authenticated connections', async () => {
+      mockRooms.set('test-room', createMockRoom('test-room'))
+
       const { ws: ws1 } = await connectAndCapture()
       const { ws: ws2 } = await connectAndCapture()
+
+      // Authenticate both connections with different wallets
+      ws1.send(JSON.stringify({
+        event: WSEvent.JOIN_ROOM,
+        payload: { roomId: 'test-room', walletAddress: 'kaspatest:wallet1' },
+      }))
+      ws2.send(JSON.stringify({
+        event: WSEvent.JOIN_ROOM,
+        payload: { roomId: 'test-room', walletAddress: 'kaspatest:wallet2' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
 
       expect(wsServer.getConnectionCount()).toBe(2)
 
@@ -190,7 +218,7 @@ describe('WSServer', () => {
       mockRooms.set('test-room-id', createMockRoom('test-room-id'))
     })
 
-    it('should handle LEAVE_ROOM event', async () => {
+    it('should handle LEAVE_ROOM event using stored wallet address', async () => {
       const { ws } = await connectAndCapture()
 
       // Join first
@@ -200,13 +228,14 @@ describe('WSServer', () => {
       }))
       await new Promise(resolve => setTimeout(resolve, 50))
 
-      // Leave
+      // Leave - wallet address in payload should be ignored
       ws.send(JSON.stringify({
         event: WSEvent.LEAVE_ROOM,
-        payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:wallet1' },
+        payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:attacker' },
       }))
       await new Promise(resolve => setTimeout(resolve, 50))
 
+      // Security: Should use stored wallet address, not the one from payload
       expect(roomManager.leaveRoom).toHaveBeenCalledWith('test-room-id', 'kaspatest:wallet1')
 
       ws.close()
@@ -236,6 +265,28 @@ describe('WSServer', () => {
       expect(msg.payload.message).toBe('Leave failed')
 
       ws.close()
+      // Wait for close handler to process before next test
+      await new Promise(resolve => setTimeout(resolve, 100))
+    })
+
+    it('should reject LEAVE_ROOM when not authenticated', async () => {
+      // Clear mocks to ensure clean state from previous test's close handler
+      vi.mocked(roomManager.leaveRoom).mockClear()
+
+      const { ws } = await connectAndCapture()
+
+      ws.send(JSON.stringify({
+        event: WSEvent.LEAVE_ROOM,
+        payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:wallet1' },
+      }))
+
+      const msg = await waitForMessage(ws)
+
+      expect(msg.event).toBe(WSEvent.ERROR)
+      expect(msg.payload.message).toBe('Not authenticated - join a room or queue first')
+      expect(roomManager.leaveRoom).not.toHaveBeenCalled()
+
+      ws.close()
     })
   })
 
@@ -258,7 +309,32 @@ describe('WSServer', () => {
   })
 
   describe('LEAVE_QUEUE event', () => {
-    it('should handle LEAVE_QUEUE event', async () => {
+    it('should handle LEAVE_QUEUE event using stored wallet address', async () => {
+      const { ws } = await connectAndCapture()
+
+      // Join queue first to set wallet address
+      ws.send(JSON.stringify({
+        event: WSEvent.JOIN_QUEUE,
+        payload: { mode: GameMode.REGULAR, seatPrice: 10, walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      // Leave queue - wallet address comes from stored state, not payload
+      ws.send(JSON.stringify({
+        event: WSEvent.LEAVE_QUEUE,
+        payload: { walletAddress: 'kaspatest:attacker' }, // This should be ignored
+      }))
+
+      const msg = await waitForMessage(ws)
+
+      // Security: Should use stored wallet address, not the one from payload
+      expect(queueManager.leaveQueue).toHaveBeenCalledWith('kaspatest:wallet1')
+      expect(msg.event).toBe('queue:left')
+
+      ws.close()
+    })
+
+    it('should reject LEAVE_QUEUE when not authenticated', async () => {
       const { ws } = await connectAndCapture()
 
       ws.send(JSON.stringify({
@@ -268,8 +344,9 @@ describe('WSServer', () => {
 
       const msg = await waitForMessage(ws)
 
-      expect(queueManager.leaveQueue).toHaveBeenCalledWith('kaspatest:wallet1')
-      expect(msg.event).toBe('queue:left')
+      expect(msg.event).toBe(WSEvent.ERROR)
+      expect(msg.payload.message).toBe('Not authenticated - join a queue first')
+      expect(queueManager.leaveQueue).not.toHaveBeenCalled()
 
       ws.close()
     })
@@ -280,11 +357,11 @@ describe('WSServer', () => {
       mockRooms.set('test-room-id', {
         ...createMockRoom('test-room-id'),
         state: RoomState.FUNDING,
-        seats: [{ walletAddress: 'kaspatest:wallet1', index: 0, clientSeed: null, depositTxId: null, amount: 0, confirmed: false, alive: true, knsName: null, avatarUrl: null }],
+        seats: [{ walletAddress: 'kaspatest:wallet1', index: 0, depositAddress: 'kaspatest:seat0deposit', clientSeed: null, depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, alive: true, knsName: null, avatarUrl: null }],
       })
     })
 
-    it('should handle SUBMIT_CLIENT_SEED event', async () => {
+    it('should handle SUBMIT_CLIENT_SEED event using stored wallet address', async () => {
       const { ws } = await connectAndCapture()
 
       // Join room first
@@ -294,14 +371,32 @@ describe('WSServer', () => {
       }))
       await new Promise(resolve => setTimeout(resolve, 50))
 
-      // Submit client seed
+      // Submit client seed - wallet address in payload should be ignored
+      ws.send(JSON.stringify({
+        event: WSEvent.SUBMIT_CLIENT_SEED,
+        payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:attacker', clientSeed: 'my-secret-seed' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      // Security: Should use stored wallet address, not the one from payload
+      expect(roomManager.submitClientSeed).toHaveBeenCalledWith('test-room-id', 'kaspatest:wallet1', 'my-secret-seed')
+
+      ws.close()
+    })
+
+    it('should reject SUBMIT_CLIENT_SEED when not authenticated', async () => {
+      const { ws } = await connectAndCapture()
+
       ws.send(JSON.stringify({
         event: WSEvent.SUBMIT_CLIENT_SEED,
         payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:wallet1', clientSeed: 'my-secret-seed' },
       }))
-      await new Promise(resolve => setTimeout(resolve, 50))
 
-      expect(roomManager.submitClientSeed).toHaveBeenCalledWith('test-room-id', 'kaspatest:wallet1', 'my-secret-seed')
+      const msg = await waitForMessage(ws)
+
+      expect(msg.event).toBe(WSEvent.ERROR)
+      expect(msg.payload.message).toBe('Not authenticated - join a room first')
+      expect(roomManager.submitClientSeed).not.toHaveBeenCalled()
 
       ws.close()
     })
@@ -315,17 +410,26 @@ describe('WSServer', () => {
       })
     })
 
-    it('should handle PULL_TRIGGER event', async () => {
+    it('should handle PULL_TRIGGER event using stored wallet address', async () => {
       vi.mocked(roomManager.pullTrigger).mockReturnValue({ success: true })
 
       const { ws } = await connectAndCapture()
 
+      // Join room first to set wallet address
       ws.send(JSON.stringify({
-        event: WSEvent.PULL_TRIGGER,
+        event: WSEvent.JOIN_ROOM,
         payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:wallet1' },
       }))
       await new Promise(resolve => setTimeout(resolve, 50))
 
+      // Pull trigger - wallet address in payload should be ignored
+      ws.send(JSON.stringify({
+        event: WSEvent.PULL_TRIGGER,
+        payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:attacker' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      // Security: Should use stored wallet address, not the one from payload
       expect(roomManager.pullTrigger).toHaveBeenCalledWith('test-room-id', 'kaspatest:wallet1')
 
       ws.close()
@@ -336,6 +440,13 @@ describe('WSServer', () => {
 
       const { ws } = await connectAndCapture()
 
+      // Join room first
+      ws.send(JSON.stringify({
+        event: WSEvent.JOIN_ROOM,
+        payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
       ws.send(JSON.stringify({
         event: WSEvent.PULL_TRIGGER,
         payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:wallet1' },
@@ -345,6 +456,23 @@ describe('WSServer', () => {
 
       expect(msg.event).toBe(WSEvent.ERROR)
       expect(msg.payload.message).toBe('Not your turn')
+
+      ws.close()
+    })
+
+    it('should reject PULL_TRIGGER when not authenticated', async () => {
+      const { ws } = await connectAndCapture()
+
+      ws.send(JSON.stringify({
+        event: WSEvent.PULL_TRIGGER,
+        payload: { roomId: 'test-room-id', walletAddress: 'kaspatest:wallet1' },
+      }))
+
+      const msg = await waitForMessage(ws)
+
+      expect(msg.event).toBe(WSEvent.ERROR)
+      expect(msg.payload.message).toBe('Not authenticated - join a room first')
+      expect(roomManager.pullTrigger).not.toHaveBeenCalled()
 
       ws.close()
     })
@@ -472,13 +600,26 @@ describe('WSServer', () => {
   })
 
   describe('getClientCount', () => {
-    it('should return correct client count', async () => {
+    it('should return correct authenticated client count', async () => {
+      mockRooms.set('test-room', createMockRoom('test-room'))
+
       expect(wsServer.getClientCount()).toBe(0)
 
       const { ws: ws1 } = await connectAndCapture()
+      // Authenticate by joining a room
+      ws1.send(JSON.stringify({
+        event: WSEvent.JOIN_ROOM,
+        payload: { roomId: 'test-room', walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
       expect(wsServer.getClientCount()).toBe(1)
 
       const { ws: ws2 } = await connectAndCapture()
+      ws2.send(JSON.stringify({
+        event: WSEvent.JOIN_ROOM,
+        payload: { roomId: 'test-room', walletAddress: 'kaspatest:wallet2' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
       expect(wsServer.getClientCount()).toBe(2)
 
       ws1.close()

@@ -13,7 +13,7 @@ import {
   type RoundResultPayload,
   type GameEndPayload,
   type RNGRevealPayload,
-  SETTLEMENT_BLOCK_OFFSET,
+  SOMPI_PER_KAS,
 } from '../../../shared/index.js'
 import { store } from '../db/store.js'
 import { walletManager } from '../crypto/wallet.js'
@@ -78,7 +78,8 @@ export class RoomManager {
     }
 
     // Check if it's this player's turn
-    const currentShooter = room.seats[pending.currentShooterIndex]
+    // Use .find() since array order changes after shuffle but seat.index stays stable
+    const currentShooter = room.seats.find(s => s.index === pending.currentShooterIndex)
     if (!currentShooter || currentShooter.walletAddress !== walletAddress) {
       return { success: false, error: 'Not your turn' }
     }
@@ -101,7 +102,8 @@ export class RoomManager {
     const room = store.getRoom(roomId)
     if (!room) return null
 
-    const seat = room.seats[pending.currentShooterIndex]
+    // Use .find() since array order changes after shuffle but seat.index stays stable
+    const seat = room.seats.find(s => s.index === pending.currentShooterIndex)
     if (!seat) return null
 
     return { seatIndex: pending.currentShooterIndex, walletAddress: seat.walletAddress }
@@ -154,6 +156,7 @@ export class RoomManager {
       minPlayers,
       state: RoomState.LOBBY,
       createdAt: now,
+      updatedAt: now,
       expiresAt: now + timeoutSeconds * 1000,
       depositAddress,
       lockHeight: null,
@@ -162,6 +165,7 @@ export class RoomManager {
       serverSeed: null, // SECURITY: Don't expose until game ends!
       houseCutPercent: config.houseCutPercent,
       payoutTxId: null,
+      currentTurnSeatIndex: null, // Set during PLAYING state
       seats: [],
       rounds: [],
     }
@@ -210,6 +214,7 @@ export class RoomManager {
       depositTxId: null,
       amount: 0,
       confirmed: false,
+      confirmedAt: null,
       clientSeed: null,
       alive: true,
       knsName: null,
@@ -303,26 +308,28 @@ export class RoomManager {
 
     if (room.state === RoomState.PLAYING) {
       // PLAYING: mark player as dead (forfeit)
+      // Note: seatIndex here is from findIndex which gives array position, not seat.index
+      // We need the actual seat object to get the stable seat.index for database updates
       const seat = room.seats[seatIndex]
-      if (!seat.alive) {
-        // Already dead, nothing to do
+      if (!seat || !seat.alive) {
+        // Already dead or not found, nothing to do
         return
       }
-      store.updateSeat(roomId, seatIndex, { alive: false })
-      logUserAction('Player forfeited during game', walletAddress, { roomId, seatIndex })
+      store.updateSeat(roomId, seat.index, { alive: false })
+      logUserAction('Player forfeited during game', walletAddress, { roomId, seatIndex: seat.index })
 
       // Broadcast the forfeit
       if (this.wsServer) {
         this.wsServer.broadcastToRoom(roomId, 'player:forfeit', {
           roomId,
-          seatIndex,
+          seatIndex: seat.index,
           walletAddress
         })
       }
 
       // If it was their turn, resolve the wait so game loop continues
       const pending = this.pendingGames.get(roomId)
-      if (pending && pending.currentShooterIndex === seatIndex && pending.resolveWait) {
+      if (pending && pending.currentShooterIndex === seat.index && pending.resolveWait) {
         pending.resolveWait()
       }
       // Game loop will check win condition on next iteration
@@ -350,7 +357,8 @@ export class RoomManager {
       return
     }
 
-    const seat = room.seats[seatIndex]
+    // Use .find() since seatIndex is the stable seat.index, not array position
+    const seat = room.seats.find(s => s.index === seatIndex)
     if (!seat) throw new Error('Seat not found')
 
     // Idempotent: skip if already confirmed (prevents race conditions)
@@ -362,6 +370,7 @@ export class RoomManager {
     seat.depositTxId = txId
     seat.amount = amount
     seat.confirmed = true
+    seat.confirmedAt = Date.now()
 
     store.updateSeat(roomId, seatIndex, seat)
     logRoomEvent('Deposit confirmed', roomId, { seatIndex, amount, txId })
@@ -491,11 +500,8 @@ export class RoomManager {
       throw new Error('Room not locked')
     }
 
-    // Shuffle seats before starting for fairness (using server seed for determinism)
-    this.shuffleSeats(room)
-    logRoomEvent('Seats shuffled', roomId, {
-      newOrder: room.seats.map(s => ({ index: s.index, addr: s.walletAddress?.slice(-8) }))
-    })
+    // Turn order follows seat join order (seat 0 → 1 → 2 → ... → 5)
+    // No shuffle - players shoot in the order they joined
 
     room.state = RoomState.PLAYING
     store.updateRoom(roomId, room)
@@ -571,29 +577,62 @@ export class RoomManager {
       totalChambers
     )
 
+    // Precompute original turn order (all seats sorted by payment confirmation time)
+    // This order is stable throughout the game - we cycle through it, skipping dead players
+    const originalTurnOrder = [...room.seats].sort((a, b) => {
+      const aTime = a.confirmedAt ?? a.index
+      const bTime = b.confirmedAt ?? b.index
+      return aTime - bTime
+    })
+
+    // Track previous shooter's seat.index for proper rotation after deaths
+    let lastShooterSeatIndex: number | null = null
+
     while (true) {
-      const aliveSeats = room.seats.filter((s) => s.alive)
-      if (aliveSeats.length <= 0) {
+      const aliveCount = room.seats.filter((s) => s.alive).length
+      if (aliveCount <= 0) {
         logger.error('No alive seats in room', { roomId })
         break
       }
 
       // Check win condition
-      if (room.mode === GameMode.REGULAR && aliveSeats.length < room.seats.length) {
+      if (room.mode === GameMode.REGULAR && aliveCount < room.seats.length) {
         // First death - game ends
         logRoomEvent('Game ended (Regular mode)', roomId)
         break
       }
 
-      if (room.mode === GameMode.EXTREME && aliveSeats.length === 1) {
+      if (room.mode === GameMode.EXTREME && aliveCount === 1) {
         // Last survivor - game ends
         logRoomEvent('Game ended (Extreme mode)', roomId)
         break
       }
 
-      // Pick shooter (rotate among alive players)
-      const shooterSeatIndex = aliveSeats[roundIndex % aliveSeats.length].index
-      const shooter = room.seats[shooterSeatIndex]
+      // Pick next shooter: find next alive player after last shooter in original payment order
+      // This ensures proper rotation even when players die (no skipping)
+      let shooter: Seat | undefined
+      if (lastShooterSeatIndex === null) {
+        // First round: start with first alive player in payment order
+        shooter = originalTurnOrder.find((s) => s.alive)
+      } else {
+        // Find last shooter's position in original order, then find next alive player
+        const lastPos = originalTurnOrder.findIndex((s) => s.index === lastShooterSeatIndex)
+        for (let i = 1; i <= originalTurnOrder.length; i++) {
+          const candidate = originalTurnOrder[(lastPos + i) % originalTurnOrder.length]
+          if (candidate.alive) {
+            shooter = candidate
+            break
+          }
+        }
+      }
+
+      if (!shooter) {
+        logger.error('Could not find next shooter', { roomId, lastShooterSeatIndex })
+        break
+      }
+
+      const shooterSeatIndex = shooter.index
+      lastShooterSeatIndex = shooterSeatIndex
 
       // Store pending game state for trigger pull
       const pendingState: PendingGameState = {
@@ -606,6 +645,9 @@ export class RoomManager {
         currentShooterIndex: shooterSeatIndex,
       }
       this.pendingGames.set(roomId, pendingState)
+
+      // Persist current turn to room state (so reconnecting clients know whose turn it is)
+      store.updateRoom(roomId, { currentTurnSeatIndex: shooterSeatIndex })
 
       // Broadcast TURN_START event to notify whose turn it is
       if (this.wsServer) {
@@ -663,7 +705,11 @@ export class RoomManager {
 
       if (died) {
         // Mark shooter as dead and persist to store
-        room.seats[shooterSeatIndex].alive = false
+        // Use .find() since shooterSeatIndex is the stable seat.index, not array position
+        const deadSeat = room.seats.find(s => s.index === shooterSeatIndex)
+        if (deadSeat) {
+          deadSeat.alive = false
+        }
         store.updateSeat(roomId, shooterSeatIndex, { alive: false })
         logRoomEvent('Player died', roomId, { seatIndex: shooterSeatIndex, roundIndex })
       }
@@ -747,15 +793,24 @@ export class RoomManager {
 
   /**
    * Settle game and calculate payouts
+   * All monetary calculations done in sompi (integers) to avoid floating point errors
    */
   private async settleGame(roomId: string, blockHash: string): Promise<void> {
     const room = store.getRoom(roomId)
     if (!room) return
 
     const survivors = room.seats.filter((s) => s.alive)
-    const pot = room.seatPrice * room.seats.length
-    const houseCut = pot * (room.houseCutPercent / 100)
-    const payoutAmount = pot - houseCut
+
+    // Convert seat price to sompi and calculate pot in sompi (integer math)
+    const seatPriceSompi = Math.floor(room.seatPrice * SOMPI_PER_KAS)
+    const potSompi = seatPriceSompi * room.seats.length
+    const houseCutSompi = Math.floor(potSompi * room.houseCutPercent / 100)
+    const payoutAmountSompi = potSompi - houseCutSompi
+
+    // Convert back to KAS for logging only
+    const pot = potSompi / SOMPI_PER_KAS
+    const houseCut = houseCutSompi / SOMPI_PER_KAS
+    const payoutAmount = payoutAmountSompi / SOMPI_PER_KAS
 
     logRoomEvent('Game settlement', roomId, { pot, houseCut, payoutAmount })
 
@@ -766,7 +821,10 @@ export class RoomManager {
       return
     }
 
-    const payoutPerSurvivor = payoutAmount / survivors.length
+    // Integer division for payout per survivor (in sompi)
+    const payoutPerSurvivorSompi = Math.floor(payoutAmountSompi / survivors.length)
+    // Convert back to KAS for storage (Payout.amount is in KAS)
+    const payoutPerSurvivor = payoutPerSurvivorSompi / SOMPI_PER_KAS
 
     survivors.forEach((seat) => {
       if (!seat.walletAddress) return
@@ -794,6 +852,7 @@ export class RoomManager {
 
     room.state = RoomState.SETTLED
     room.payoutTxId = payoutTxId
+    room.currentTurnSeatIndex = null // Game over, no more turns
     store.updateRoom(roomId, room)
 
     logRoomEvent('Game settled', roomId, { survivorCount: survivors.length, payoutTxId })
@@ -839,42 +898,6 @@ export class RoomManager {
   }
 
   /**
-   * Shuffle seats using Fisher-Yates algorithm seeded by server seed
-   * This ensures deterministic, provably fair seat ordering
-   */
-  private shuffleSeats(room: Room): void {
-    const serverSeed = this.serverSeeds.get(room.id)
-    if (!serverSeed) {
-      logger.warn('No server seed for shuffle, using random', { roomId: room.id })
-    }
-
-    // Create a seeded pseudo-random function from server seed
-    const seedStr = serverSeed || `${room.id}-${Date.now()}`
-    let seedNum = 0
-    for (let i = 0; i < seedStr.length; i++) {
-      seedNum = ((seedNum << 5) - seedNum + seedStr.charCodeAt(i)) | 0
-    }
-
-    const seededRandom = () => {
-      seedNum = (seedNum * 1103515245 + 12345) & 0x7fffffff
-      return seedNum / 0x7fffffff
-    }
-
-    // Fisher-Yates shuffle
-    const seats = room.seats
-    for (let i = seats.length - 1; i > 0; i--) {
-      const j = Math.floor(seededRandom() * (i + 1))
-      // Swap seats
-      ;[seats[i], seats[j]] = [seats[j], seats[i]]
-    }
-
-    // Reassign seat indices after shuffle
-    seats.forEach((seat, idx) => {
-      seat.index = idx
-    })
-  }
-
-  /**
    * Abort room and refund deposits
    */
   async abortRoom(roomId: string): Promise<void> {
@@ -900,12 +923,19 @@ export class RoomManager {
       const { payoutService } = await import('../crypto/services/payout-service.js')
       const refundTxIds = await payoutService.sendRefunds(roomId)
 
+      // Always persist refundTxIds to track that refund was attempted
+      // Pass explicit field update to ensure it's saved (not conditional)
+      room.refundTxIds = refundTxIds
+      store.updateRoom(roomId, { refundTxIds })
+
       if (refundTxIds.length > 0) {
-        room.refundTxIds = refundTxIds
-        store.updateRoom(roomId, room)
         logRoomEvent('Refunds sent', roomId, { txIds: refundTxIds })
+      } else {
+        logger.warn('Refund returned no transactions - no UTXOs or insufficient funds', { roomId })
       }
     } catch (error: any) {
+      // Persist empty array to indicate refund was attempted but failed
+      store.updateRoom(roomId, { refundTxIds: [] })
       logger.error('Failed to send refunds for aborted room', {
         roomId,
         error: error?.message || String(error),
@@ -920,19 +950,43 @@ export class RoomManager {
   }
 
   /**
-   * Check for expired rooms and abort them
+   * Check for expired and stuck rooms and abort them with refunds
    */
   async checkExpiredRooms(): Promise<void> {
     const now = Date.now()
     const rooms = store.getAllRooms()
 
     for (const room of rooms) {
+      // Check LOBBY and FUNDING rooms that have expired
       if (
         (room.state === RoomState.LOBBY || room.state === RoomState.FUNDING) &&
         now > room.expiresAt
       ) {
-        logRoomEvent('Room expired', room.id)
+        logRoomEvent('Room expired', room.id, { state: room.state })
         await this.abortRoom(room.id)
+        continue
+      }
+
+      // Check LOCKED rooms that have been waiting too long (> 30 seconds)
+      // This catches rooms where the settlement block was never reached
+      if (room.state === RoomState.LOCKED) {
+        const lockedDuration = now - (room.updatedAt || room.createdAt)
+        if (lockedDuration > 30 * 1000) {
+          logRoomEvent('Stuck LOCKED room detected, aborting', room.id, { lockedDuration })
+          await this.abortRoom(room.id)
+          continue
+        }
+      }
+
+      // Check PLAYING rooms that have been stuck too long (> 5 minutes)
+      // This catches rooms where the game loop crashed or hung
+      if (room.state === RoomState.PLAYING) {
+        const playingDuration = now - (room.updatedAt || room.createdAt)
+        if (playingDuration > 5 * 60 * 1000) {
+          logRoomEvent('Stuck PLAYING room detected, aborting', room.id, { playingDuration })
+          await this.abortRoom(room.id)
+          continue
+        }
       }
     }
   }

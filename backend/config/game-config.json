@@ -1,4 +1,5 @@
 {
+  "houseCutPercent": 5,
   "quickMatch": {
     "enabled": true,
     "seatPrice": 10,

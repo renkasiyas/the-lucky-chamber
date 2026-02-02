@@ -1,8 +1,7 @@
 # Dependencies
 node_modules/
 
-# Lock files
-package-lock.json
+# Lock files (keeping package-lock.json for reproducible builds)
 yarn.lock
 pnpm-lock.yaml
 
@@ -39,3 +38,6 @@ Thumbs.db
 
 # Coverage
 coverage/
+
+*.md
+!README.md

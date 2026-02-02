@@ -42,8 +42,8 @@ describe('Rate Limit', () => {
 
     it('should block connections over limit', () => {
       const ip = '192.168.1.102'
-      // Allow up to rate limit
-      for (let i = 0; i < 10; i++) {
+      // WS_RATE_LIMIT is 60 in non-production (test env)
+      for (let i = 0; i < 60; i++) {
         checkWsRateLimit(ip)
       }
       // Next connection should be blocked
@@ -53,8 +53,8 @@ describe('Rate Limit', () => {
     it('should reset after window expires', async () => {
       const ip = '192.168.1.103'
 
-      // Max out the rate limit
-      for (let i = 0; i < 10; i++) {
+      // Max out the rate limit (60 in non-production)
+      for (let i = 0; i < 60; i++) {
         checkWsRateLimit(ip)
       }
       expect(checkWsRateLimit(ip)).toBe(false)
@@ -67,8 +67,8 @@ describe('Rate Limit', () => {
       const ip1 = '192.168.1.104'
       const ip2 = '192.168.1.105'
 
-      // Max out ip1
-      for (let i = 0; i < 10; i++) {
+      // Max out ip1 (60 in non-production)
+      for (let i = 0; i < 60; i++) {
         checkWsRateLimit(ip1)
       }
 

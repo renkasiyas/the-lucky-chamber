@@ -17,6 +17,7 @@ import {
 import { roomManager } from '../game/room-manager.js'
 import { queueManager } from '../game/queue-manager.js'
 import { logger } from '../utils/logger.js'
+import { checkWsRateLimit } from '../middleware/rate-limit.js'
 
 interface Client {
   ws: WebSocket
@@ -30,7 +31,7 @@ export class WSServer {
   private broadcastInterval: NodeJS.Timeout | null = null
 
   constructor(port: number) {
-    this.wss = new WebSocketServer({ port })
+    this.wss = new WebSocketServer({ port, maxPayload: 64 * 1024 })
     logger.info(`WebSocket server listening on port ${port}`)
 
     this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
@@ -93,6 +94,18 @@ export class WSServer {
   }
 
   private handleConnection(ws: WebSocket, req: IncomingMessage): void {
+    // Extract IP address, handling proxied requests
+    const forwardedFor = req.headers['x-forwarded-for']
+    const ip = (typeof forwardedFor === 'string' ? forwardedFor.split(',')[0].trim() : forwardedFor?.[0])
+      || req.socket.remoteAddress
+      || 'unknown'
+
+    // Check rate limit before accepting connection
+    if (!checkWsRateLimit(ip)) {
+      ws.close(1008, 'Rate limit exceeded')
+      return
+    }
+
     const client: Client = {
       ws,
       walletAddress: null,
@@ -100,7 +113,7 @@ export class WSServer {
     }
 
     this.clients.set(ws, client)
-    logger.debug(`WebSocket client connected`, { total: this.clients.size })
+    logger.debug(`WebSocket client connected`, { total: this.clients.size, ip })
 
     // Broadcast updated connection count to all clients
     this.broadcastConnectionCount()
@@ -134,9 +147,9 @@ export class WSServer {
               // Don't abort on disconnect - user might reconnect or their deposit might arrive
               logger.info('Player disconnected during FUNDING, keeping seat', { walletAddress: client.walletAddress, roomId })
             } else if (room.state === 'PLAYING') {
-              // PLAYING: forfeit - mark as dead
-              await roomManager.leaveRoom(roomId, client.walletAddress!)
-              logger.info('Player forfeited due to disconnect', { walletAddress: client.walletAddress, roomId })
+              // PLAYING: do NOT forfeit on disconnect - player may be refreshing
+              // The 30s turn timeout handles AFK players naturally
+              logger.info('Player disconnected during PLAYING, keeping seat (may reconnect)', { walletAddress: client.walletAddress, roomId })
             }
           } catch (err) {
             logger.debug('Could not handle disconnected player', { walletAddress: client.walletAddress, roomId, error: err })
@@ -207,7 +220,13 @@ export class WSServer {
     const client = this.clients.get(ws)
     if (!client) return
 
-    const result = roomManager.joinRoom(roomId, walletAddress)
+    // Security: Once wallet is set, it cannot be changed for this connection
+    if (client.walletAddress && client.walletAddress !== walletAddress) {
+      this.sendError(ws, 'Wallet address cannot be changed for this connection')
+      return
+    }
+
+    roomManager.joinRoom(roomId, walletAddress)
     client.walletAddress = walletAddress
     client.subscribedRooms.add(roomId)
 
@@ -229,6 +248,12 @@ export class WSServer {
       return
     }
 
+    // Security: Once wallet is set, it cannot be changed for this connection
+    if (client.walletAddress && client.walletAddress !== walletAddress) {
+      this.sendError(ws, 'Wallet address cannot be changed for this connection')
+      return
+    }
+
     client.walletAddress = walletAddress
     client.subscribedRooms.add(roomId)
 
@@ -242,12 +267,18 @@ export class WSServer {
   }
 
   private async handleLeaveRoom(ws: WebSocket, payload: LeaveRoomPayload): Promise<void> {
-    const { roomId, walletAddress } = payload
+    const { roomId } = payload
     const client = this.clients.get(ws)
     if (!client) return
 
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room or queue first')
+      return
+    }
+
     try {
-      await roomManager.leaveRoom(roomId, walletAddress)
+      await roomManager.leaveRoom(roomId, client.walletAddress)
       client.subscribedRooms.delete(roomId)
       this.broadcastRoomUpdate(roomId)
     } catch (err: any) {
@@ -259,6 +290,12 @@ export class WSServer {
     const { mode, seatPrice, walletAddress } = payload
     const client = this.clients.get(ws)
     if (!client) return
+
+    // Security: Once wallet is set, it cannot be changed for this connection
+    if (client.walletAddress && client.walletAddress !== walletAddress) {
+      this.sendError(ws, 'Wallet address cannot be changed for this connection')
+      return
+    }
 
     client.walletAddress = walletAddress
     queueManager.joinQueue(walletAddress, mode, seatPrice)
@@ -276,10 +313,17 @@ export class WSServer {
     })
   }
 
-  private handleLeaveQueue(ws: WebSocket, payload: LeaveQueuePayload): void {
-    const { walletAddress } = payload
+  private handleLeaveQueue(ws: WebSocket, _payload: LeaveQueuePayload): void {
+    const client = this.clients.get(ws)
+    if (!client) return
 
-    queueManager.leaveQueue(walletAddress)
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a queue first')
+      return
+    }
+
+    queueManager.leaveQueue(client.walletAddress)
 
     this.send(ws, {
       event: 'queue:left',
@@ -288,17 +332,33 @@ export class WSServer {
   }
 
   private handleSubmitClientSeed(ws: WebSocket, payload: SubmitClientSeedPayload): void {
-    const { roomId, walletAddress, clientSeed } = payload
+    const { roomId, clientSeed } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
 
-    roomManager.submitClientSeed(roomId, walletAddress, clientSeed)
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+
+    roomManager.submitClientSeed(roomId, client.walletAddress, clientSeed)
 
     this.broadcastRoomUpdate(roomId)
   }
 
   private handlePullTrigger(ws: WebSocket, payload: PullTriggerPayload): void {
-    const { roomId, walletAddress } = payload
+    const { roomId } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
 
-    const result = roomManager.pullTrigger(roomId, walletAddress)
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+
+    const result = roomManager.pullTrigger(roomId, client.walletAddress)
 
     if (!result.success) {
       this.sendError(ws, result.error || 'Failed to pull trigger')
@@ -364,29 +424,52 @@ export class WSServer {
   }
 
   /**
-   * Broadcast connection count to all connected clients
+   * Broadcast unique user count to all connected clients
+   * Counts unique wallet addresses (authenticated users) rather than raw connections
+   * since a single user may have multiple connections (from different pages/tabs)
    */
   private broadcastConnectionCount(): void {
-    const count = this.clients.size
+    const uniqueUsers = this.getUniqueUserCount()
     this.clients.forEach((client) => {
       this.send(client.ws, {
         event: 'connection:count',
-        payload: { count }
+        payload: { count: uniqueUsers }
       })
     })
   }
 
   /**
-   * Get current connection count
+   * Get count of unique authenticated users
+   * Only counts connections that have identified with a wallet address
+   */
+  private getUniqueUserCount(): number {
+    const uniqueWallets = new Set<string>()
+    this.clients.forEach((client) => {
+      if (client.walletAddress) {
+        uniqueWallets.add(client.walletAddress)
+      }
+    })
+    return uniqueWallets.size
+  }
+
+  /**
+   * Get unique authenticated user count
    */
   getConnectionCount(): number {
+    return this.getUniqueUserCount()
+  }
+
+  /**
+   * Get raw WebSocket connection count (for debugging/admin)
+   */
+  getRawConnectionCount(): number {
     return this.clients.size
   }
 
   /**
-   * Get connected client count
+   * Get unique authenticated user count
    */
   getClientCount(): number {
-    return this.clients.size
+    return this.getUniqueUserCount()
   }
 }

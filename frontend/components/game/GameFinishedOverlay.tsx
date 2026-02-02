@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import type { Room } from '../../../shared/index'
 import { formatKAS } from '../../lib/format'
 import { useSound } from '../../hooks/useSound'
+import { ProvablyFairModal } from '../ui/ProvablyFairModal'
 
 interface GameFinishedOverlayProps {
   room: Room
@@ -24,8 +25,11 @@ export function GameFinishedOverlay({
   onDismiss,
   onPlayAgain,
 }: GameFinishedOverlayProps) {
-  const [phase, setPhase] = useState<'intro' | 'reveal' | 'results'>('intro')
-  const { play: playSound } = useSound()
+  // Skip suspense phase - we already had the dramatic BANG! reveal in ChamberGame
+  // Go straight to reveal to avoid "The chamber falls silent" after we just saw an explosion
+  const [phase, setPhase] = useState<'suspense' | 'intro' | 'reveal' | 'results'>('reveal')
+  const [showVerifier, setShowVerifier] = useState(false)
+  const { play: playSound, stop: stopSound } = useSound()
 
   const survivors = room.seats.filter(s => s.alive)
   const eliminated = room.seats.filter(s => s.walletAddress && !s.alive)
@@ -51,14 +55,18 @@ export function GameFinishedOverlay({
   [])
 
   useEffect(() => {
-    const t1 = setTimeout(() => {
-      setPhase('reveal')
-      if (iAmSurvivor) {
-        playSound('win')
-      }
-    }, 800)
-    const t2 = setTimeout(() => setPhase('results'), 2000)
-    return () => { clearTimeout(t1); clearTimeout(t2) }
+    // We start at 'reveal' phase - the drama already happened in ChamberGame
+    // Just play win sound if survivor and transition to results
+    if (iAmSurvivor) {
+      playSound('win')
+    }
+
+    // Show reveal for 2 seconds, then show results
+    const t1 = setTimeout(() => setPhase('results'), 2000)
+
+    return () => {
+      clearTimeout(t1)
+    }
   }, [iAmSurvivor, playSound])
 
   return (
@@ -137,6 +145,66 @@ export function GameFinishedOverlay({
       {/* Content */}
       <div className="relative z-10 w-full max-w-lg mx-4">
         <AnimatePresence mode="wait">
+          {/* Phase 0: Suspense - dramatic buildup */}
+          {phase === 'suspense' && (
+            <motion.div
+              key="suspense"
+              className="text-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+            >
+              {/* Heartbeat visualizer */}
+              <div className="flex items-center justify-center gap-1 mb-8">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <motion.div
+                    key={i}
+                    className="w-1.5 bg-blood-light rounded-full"
+                    animate={{ height: ['12px', '48px', '12px'] }}
+                    transition={{
+                      repeat: Infinity,
+                      duration: 0.5,
+                      delay: i * 0.1,
+                      ease: 'easeInOut'
+                    }}
+                  />
+                ))}
+              </div>
+
+              <motion.p
+                className="text-ash/60 font-mono text-sm uppercase tracking-[0.4em] mb-4"
+                animate={{ opacity: [0.4, 0.8, 0.4] }}
+                transition={{ repeat: Infinity, duration: 1 }}
+              >
+                The chamber falls silent...
+              </motion.p>
+
+              <motion.h2
+                className="font-display text-4xl text-gold tracking-[0.3em]"
+                animate={{
+                  textShadow: [
+                    '0 0 20px rgba(212,175,55,0.3)',
+                    '0 0 50px rgba(212,175,55,0.7)',
+                    '0 0 20px rgba(212,175,55,0.3)'
+                  ]
+                }}
+                transition={{ repeat: Infinity, duration: 0.8 }}
+              >
+                THE SURVIVOR IS...
+              </motion.h2>
+
+              <motion.div
+                className="mt-8 flex justify-center gap-2"
+                animate={{ opacity: [0.3, 1, 0.3] }}
+                transition={{ repeat: Infinity, duration: 0.4 }}
+              >
+                <span className="text-5xl text-chalk">•</span>
+                <span className="text-5xl text-chalk">•</span>
+                <span className="text-5xl text-chalk">•</span>
+              </motion.div>
+            </motion.div>
+          )}
+
           {/* Phase 1: Intro flash */}
           {phase === 'intro' && (
             <motion.div
@@ -177,22 +245,50 @@ export function GameFinishedOverlay({
                 className="mb-8"
               >
                 {iAmSurvivor ? (
-                  <div className="relative w-28 h-28 mx-auto">
+                  <div className="relative w-32 h-32 mx-auto">
+                    {/* Explosive burst effect */}
+                    <motion.div
+                      className="absolute inset-0 rounded-full"
+                      initial={{ scale: 0, opacity: 1 }}
+                      animate={{ scale: [0, 3, 4], opacity: [1, 0.5, 0] }}
+                      transition={{ duration: 0.8 }}
+                      style={{ background: 'radial-gradient(circle, rgba(16,185,129,0.8), transparent)' }}
+                    />
                     {/* Pulsing rings */}
                     <motion.div
-                      className="absolute inset-0 rounded-full border-2 border-alive/50"
-                      animate={{ scale: [1, 1.4, 1.4], opacity: [0.5, 0, 0] }}
-                      transition={{ repeat: Infinity, duration: 1.5 }}
+                      className="absolute inset-0 rounded-full border-4 border-alive"
+                      animate={{ scale: [1, 1.6, 1.6], opacity: [0.8, 0, 0] }}
+                      transition={{ repeat: Infinity, duration: 1.2 }}
                     />
                     <motion.div
-                      className="absolute inset-0 rounded-full border-2 border-alive/50"
-                      animate={{ scale: [1, 1.4, 1.4], opacity: [0.5, 0, 0] }}
-                      transition={{ repeat: Infinity, duration: 1.5, delay: 0.5 }}
+                      className="absolute inset-0 rounded-full border-4 border-alive"
+                      animate={{ scale: [1, 1.6, 1.6], opacity: [0.8, 0, 0] }}
+                      transition={{ repeat: Infinity, duration: 1.2, delay: 0.4 }}
                     />
-                    {/* Main circle */}
-                    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-alive via-alive-light to-alive shadow-[0_0_60px_rgba(16,185,129,0.6)]" />
+                    <motion.div
+                      className="absolute inset-0 rounded-full border-2 border-gold"
+                      animate={{ scale: [1, 1.8, 1.8], opacity: [0.6, 0, 0] }}
+                      transition={{ repeat: Infinity, duration: 1.5, delay: 0.2 }}
+                    />
+                    {/* Main circle - with shimmer */}
+                    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-alive via-alive-light to-alive shadow-[0_0_80px_rgba(16,185,129,0.8)] overflow-hidden">
+                      <motion.div
+                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent -skew-x-12"
+                        animate={{ x: ['-200%', '200%'] }}
+                        transition={{ repeat: Infinity, duration: 2, ease: 'linear' }}
+                      />
+                    </div>
+                    {/* Crown for victory */}
+                    <motion.div
+                      className="absolute -top-10 left-1/2 -translate-x-1/2 text-4xl"
+                      initial={{ y: -20, opacity: 0, scale: 0 }}
+                      animate={{ y: 0, opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.3, type: 'spring', stiffness: 300 }}
+                    >
+                      👑
+                    </motion.div>
                     {/* Checkmark */}
-                    <svg className="absolute inset-0 w-full h-full p-7 text-void" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="absolute inset-0 w-full h-full p-8 text-void" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <motion.path
                         strokeLinecap="round"
                         strokeLinejoin="round"
@@ -231,17 +327,28 @@ export function GameFinishedOverlay({
               </motion.div>
 
               <motion.h1
-                className={`font-display text-6xl tracking-widest ${
+                className={`font-display text-7xl tracking-widest ${
                   iAmSurvivor
-                    ? 'text-alive-light drop-shadow-[0_0_40px_rgba(16,185,129,0.8)]'
+                    ? 'text-alive-light drop-shadow-[0_0_60px_rgba(16,185,129,0.9)]'
                     : 'text-blood-light drop-shadow-[0_0_40px_rgba(239,68,68,0.8)]'
                 }`}
-                initial={{ y: 30, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 0.2 }}
+                initial={{ y: 30, opacity: 0, scale: 0.5 }}
+                animate={{ y: 0, opacity: 1, scale: [0.5, 1.1, 1] }}
+                transition={{ delay: 0.2, duration: 0.5 }}
               >
-                {iAmSurvivor ? 'VICTORY' : 'DEFEATED'}
+                {iAmSurvivor ? 'VICTORY!' : 'DEFEATED'}
               </motion.h1>
+
+              {iAmSurvivor && (
+                <motion.p
+                  className="mt-4 text-alive/80 font-mono text-lg tracking-wider"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.5 }}
+                >
+                  YOU SURVIVED THE CHAMBER
+                </motion.p>
+              )}
             </motion.div>
           )}
 
@@ -290,7 +397,12 @@ export function GameFinishedOverlay({
                   <div className="flex justify-center items-center gap-3 flex-wrap">
                     {room.seats
                       .filter(s => s.walletAddress)
-                      .sort((a, b) => a.index - b.index)
+                      .sort((a, b) => {
+                        // Sort by payment confirmation time (first payer = position 1)
+                        const aTime = a.confirmedAt ?? a.index
+                        const bTime = b.confirmedAt ?? b.index
+                        return aTime - bTime
+                      })
                       .map((seat, i) => {
                         const isDead = !seat.alive
                         const isMe = seat.walletAddress === myAddress
@@ -312,7 +424,7 @@ export function GameFinishedOverlay({
                                   : 'bg-gradient-to-br from-alive to-alive-light text-void shadow-[0_0_12px_rgba(16,185,129,0.4)]'
                               }
                             `}>
-                              {isDead ? '✕' : seat.index + 1}
+                              {isDead ? '✕' : i + 1}
                               {isMe && !isDead && (
                                 <motion.div
                                   className="absolute -inset-1 rounded-full border-2 border-gold/50"
@@ -391,24 +503,35 @@ export function GameFinishedOverlay({
                 </div>
 
                 {/* Actions */}
-                <div className="p-4 border-t border-edge/30 flex gap-3">
+                <div className="p-4 border-t border-edge/30 space-y-3">
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => { playSound('click'); onDismiss() }}
+                      className="flex-1 py-3.5 px-4 bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge transition-all"
+                    >
+                      DETAILS
+                    </button>
+                    <button
+                      onClick={() => { playSound('click'); onPlayAgain() }}
+                      className={`
+                        flex-1 py-3.5 px-4 rounded-xl font-display text-sm tracking-wider text-void transition-all
+                        ${iAmSurvivor
+                          ? 'bg-gradient-to-r from-alive to-alive-light hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] hover:scale-[1.02]'
+                          : 'bg-gradient-to-r from-gold to-gold-dark hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] hover:scale-[1.02]'
+                        }
+                      `}
+                    >
+                      PLAY AGAIN
+                    </button>
+                  </div>
                   <button
-                    onClick={onDismiss}
-                    className="flex-1 py-3.5 px-4 bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge transition-all"
+                    onClick={() => { playSound('click'); setShowVerifier(true) }}
+                    className="w-full py-2.5 px-4 bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold hover:text-gold-light hover:border-gold/50 hover:bg-gold/20 transition-all flex items-center justify-center gap-2"
                   >
-                    DETAILS
-                  </button>
-                  <button
-                    onClick={onPlayAgain}
-                    className={`
-                      flex-1 py-3.5 px-4 rounded-xl font-display text-sm tracking-wider text-void transition-all
-                      ${iAmSurvivor
-                        ? 'bg-gradient-to-r from-alive to-alive-light hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] hover:scale-[1.02]'
-                        : 'bg-gradient-to-r from-gold to-gold-dark hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] hover:scale-[1.02]'
-                      }
-                    `}
-                  >
-                    PLAY AGAIN
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    VERIFY FAIRNESS
                   </button>
                 </div>
               </motion.div>
@@ -431,6 +554,14 @@ export function GameFinishedOverlay({
           </svg>
         </motion.button>
       )}
+
+      {/* Provably Fair Verifier Modal */}
+      <ProvablyFairModal
+        room={room}
+        isOpen={showVerifier}
+        onClose={() => setShowVerifier(false)}
+        explorerBaseUrl={explorerUrl}
+      />
     </motion.div>
   )
 }

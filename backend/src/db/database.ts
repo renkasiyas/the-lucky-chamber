@@ -90,30 +90,81 @@ db.exec(`
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
   );
 
+  -- Refunds table (tracks refunds linked to original deposits)
+  CREATE TABLE IF NOT EXISTS refunds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL,
+    seat_index INTEGER NOT NULL,
+    deposit_address TEXT NOT NULL,
+    wallet_address TEXT NOT NULL,
+    deposit_tx_id TEXT,
+    refund_tx_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+  );
+
   -- Indexes for common queries
   CREATE INDEX IF NOT EXISTS idx_rooms_state ON rooms(state);
   CREATE INDEX IF NOT EXISTS idx_seats_room_id ON seats(room_id);
   CREATE INDEX IF NOT EXISTS idx_seats_wallet ON seats(wallet_address);
   CREATE INDEX IF NOT EXISTS idx_rounds_room_id ON rounds(room_id);
   CREATE INDEX IF NOT EXISTS idx_payouts_room_id ON payouts(room_id);
+  CREATE INDEX IF NOT EXISTS idx_refunds_room_id ON refunds(room_id);
+  CREATE INDEX IF NOT EXISTS idx_refunds_wallet ON refunds(wallet_address);
 `)
 
 // Migration: Add deposit_address column if it doesn't exist (for existing databases)
 try {
-  const columns = db.prepare("PRAGMA table_info(seats)").all() as Array<{ name: string }>
-  const hasDepositAddress = columns.some(col => col.name === 'deposit_address')
+  const seatColumns = db.prepare("PRAGMA table_info(seats)").all() as Array<{ name: string }>
+  const hasDepositAddress = seatColumns.some(col => col.name === 'deposit_address')
   if (!hasDepositAddress) {
     logger.info('Migrating database: adding deposit_address column to seats table')
-    // Add nullable column first, then drop seats (no live games should have seats without deposit addresses)
-    db.exec(`
-      ALTER TABLE seats ADD COLUMN deposit_address TEXT;
-    `)
-    // Delete any existing seats without deposit addresses (they would be invalid anyway)
+    db.exec(`ALTER TABLE seats ADD COLUMN deposit_address TEXT;`)
     db.exec(`DELETE FROM seats WHERE deposit_address IS NULL`)
     logger.info('Migration complete: deposit_address column added')
   }
 } catch (error: any) {
-  logger.error('Migration failed', { error: error?.message || String(error) })
+  logger.error('Migration failed (deposit_address)', { error: error?.message || String(error) })
+}
+
+// Migration: Add refund_tx_ids column if it doesn't exist (for existing databases)
+try {
+  const roomColumns = db.prepare("PRAGMA table_info(rooms)").all() as Array<{ name: string }>
+  const hasRefundTxIds = roomColumns.some(col => col.name === 'refund_tx_ids')
+  if (!hasRefundTxIds) {
+    logger.info('Migrating database: adding refund_tx_ids column to rooms table')
+    db.exec(`ALTER TABLE rooms ADD COLUMN refund_tx_ids TEXT;`)
+    logger.info('Migration complete: refund_tx_ids column added')
+  }
+} catch (error: any) {
+  logger.error('Migration failed (refund_tx_ids)', { error: error?.message || String(error) })
+}
+
+// Migration: Add current_turn_seat_index column if it doesn't exist (for existing databases)
+try {
+  const roomColumns = db.prepare("PRAGMA table_info(rooms)").all() as Array<{ name: string }>
+  const hasCurrentTurnSeatIndex = roomColumns.some(col => col.name === 'current_turn_seat_index')
+  if (!hasCurrentTurnSeatIndex) {
+    logger.info('Migrating database: adding current_turn_seat_index column to rooms table')
+    db.exec(`ALTER TABLE rooms ADD COLUMN current_turn_seat_index INTEGER;`)
+    logger.info('Migration complete: current_turn_seat_index column added')
+  }
+} catch (error: any) {
+  logger.error('Migration failed (current_turn_seat_index)', { error: error?.message || String(error) })
+}
+
+// Migration: Add confirmed_at column to seats table (determines turn order by payment time)
+try {
+  const seatColumns = db.prepare("PRAGMA table_info(seats)").all() as Array<{ name: string }>
+  const hasConfirmedAt = seatColumns.some(col => col.name === 'confirmed_at')
+  if (!hasConfirmedAt) {
+    logger.info('Migrating database: adding confirmed_at column to seats table')
+    db.exec(`ALTER TABLE seats ADD COLUMN confirmed_at INTEGER;`)
+    logger.info('Migration complete: confirmed_at column added')
+  }
+} catch (error: any) {
+  logger.error('Migration failed (confirmed_at)', { error: error?.message || String(error) })
 }
 
 logger.info('SQLite database initialized', { path: DB_PATH })

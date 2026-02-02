@@ -22,7 +22,8 @@ export const apiLimiter = rateLimit({
 
 // WebSocket connection rate limiter - tracked separately
 const wsConnectionCounts = new Map<string, { count: number; resetTime: number }>()
-const WS_RATE_LIMIT = 10 // connections per minute
+// Higher limit in development to handle page refreshes and hot reload
+const WS_RATE_LIMIT = process.env.NODE_ENV === 'production' ? 20 : 60 // connections per minute
 const WS_WINDOW_MS = 60 * 1000
 
 export function checkWsRateLimit(ip: string): boolean {

@@ -14,6 +14,7 @@ describe('Store', () => {
     minPlayers: 2,
     state: RoomState.LOBBY,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
     expiresAt: Date.now() + 300000,
     depositAddress: 'kaspatest:addr123',
     lockHeight: null,
@@ -22,6 +23,7 @@ describe('Store', () => {
     serverSeed: null,
     houseCutPercent: 5,
     payoutTxId: null,
+      currentTurnSeatIndex: null,
     seats: [],
     rounds: [],
   })
@@ -101,7 +103,7 @@ describe('Store', () => {
     it('should update a seat in a room', () => {
       const room = createTestRoom()
       room.seats = [
-        { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+        { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
       ]
       store.createRoom(room)
 

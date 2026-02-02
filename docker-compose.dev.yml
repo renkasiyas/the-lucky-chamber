@@ -1,0 +1,59 @@
+# ABOUTME: Docker Compose configuration for dev environment
+# ABOUTME: Uses testnet-10, bots enabled, standard ports
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy_caddy_net
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "3001:3001"
+    networks:
+      - caddy_net
+      - default
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - NETWORK=${NETWORK:-testnet-10}
+      - WALLET_MNEMONIC=${WALLET_MNEMONIC}
+      - TREASURY_ADDRESS=${TREASURY_ADDRESS}
+      - HOUSE_CUT_PERCENT=${HOUSE_CUT_PERCENT:-5}
+      - BOTS_ENABLED=${BOTS_ENABLED:-true}
+      - MIN_CONFIRMATIONS=${MIN_CONFIRMATIONS:-1}
+      - SETTLEMENT_BLOCK_OFFSET=${SETTLEMENT_BLOCK_OFFSET:-5}
+    volumes:
+      - backend_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+        - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    networks:
+      - caddy_net
+      - default
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  backend_data:
