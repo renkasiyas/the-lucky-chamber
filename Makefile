@@ -103,7 +103,7 @@ status:  ## Check status
 restart: down up  ## Restart services
 
 health:  ## Check health
-	@curl -s http://localhost:4200/health | jq || echo "Service not healthy"
+	@curl -s http://localhost:4201/api/health | jq || echo "Service not healthy"
 
 shell:  ## Open shell in container
 	docker exec -it $(CONTAINER_NAME) /bin/sh

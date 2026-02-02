@@ -16,8 +16,8 @@ const PLAYERS = [
   { name: "Gemini", mnemonic: "infant better name cruise cart puzzle sword coyote logic rug private nest office smile grace camp volume protect garage crush aspect episode broccoli lobster" }
 ];
 
-const API_URL = "http://localhost:4001";
-const WS_URL = "ws://localhost:4002";
+const API_URL = "http://localhost:4201";
+const WS_URL = "ws://localhost:4202";
 const SEAT_PRICE = 10; // 10 KAS per seat (minimum)
 
 // Setup wallets
