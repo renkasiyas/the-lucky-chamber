@@ -111,3 +111,23 @@ router.post('/bots/toggle', (req: Request, res: Response) => {
     botCount: 0,
   })
 })
+
+// Get refunds for a room
+router.get('/rooms/:roomId/refunds', (req: Request, res: Response) => {
+  const { roomId } = req.params
+  const room = store.getRoom(roomId)
+
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' })
+  }
+
+  const refunds = store.getRefunds(roomId)
+  res.json({ refunds })
+})
+
+// Get refunds for a wallet address
+router.get('/refunds/:walletAddress', (req: Request, res: Response) => {
+  const { walletAddress } = req.params
+  const refunds = store.getRefundsByWallet(walletAddress)
+  res.json({ refunds })
+})

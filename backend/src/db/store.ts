@@ -344,6 +344,85 @@ class Store {
   }
 
   /**
+   * Record a refund (linked to original deposit)
+   */
+  createRefund(refund: {
+    roomId: string
+    seatIndex: number
+    depositAddress: string
+    walletAddress: string
+    depositTxId: string | null
+    refundTxId: string
+    amount: number
+  }): void {
+    db.prepare(`
+      INSERT INTO refunds (room_id, seat_index, deposit_address, wallet_address, deposit_tx_id, refund_tx_id, amount, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      refund.roomId,
+      refund.seatIndex,
+      refund.depositAddress,
+      refund.walletAddress,
+      refund.depositTxId,
+      refund.refundTxId,
+      refund.amount,
+      Date.now()
+    )
+  }
+
+  /**
+   * Get refunds for a room
+   */
+  getRefunds(roomId: string): Array<{
+    roomId: string
+    seatIndex: number
+    depositAddress: string
+    walletAddress: string
+    depositTxId: string | null
+    refundTxId: string
+    amount: number
+    createdAt: number
+  }> {
+    const rows = db.prepare('SELECT * FROM refunds WHERE room_id = ?').all(roomId) as any[]
+    return rows.map(row => ({
+      roomId: row.room_id,
+      seatIndex: row.seat_index,
+      depositAddress: row.deposit_address,
+      walletAddress: row.wallet_address,
+      depositTxId: row.deposit_tx_id || null,
+      refundTxId: row.refund_tx_id,
+      amount: row.amount,
+      createdAt: row.created_at
+    }))
+  }
+
+  /**
+   * Get all refunds for a wallet address
+   */
+  getRefundsByWallet(walletAddress: string): Array<{
+    roomId: string
+    seatIndex: number
+    depositAddress: string
+    walletAddress: string
+    depositTxId: string | null
+    refundTxId: string
+    amount: number
+    createdAt: number
+  }> {
+    const rows = db.prepare('SELECT * FROM refunds WHERE wallet_address = ?').all(walletAddress) as any[]
+    return rows.map(row => ({
+      roomId: row.room_id,
+      seatIndex: row.seat_index,
+      depositAddress: row.deposit_address,
+      walletAddress: row.wallet_address,
+      depositTxId: row.deposit_tx_id || null,
+      refundTxId: row.refund_tx_id,
+      amount: row.amount,
+      createdAt: row.created_at
+    }))
+  }
+
+  /**
    * Convert database rows to Room object
    */
   private rowToRoom(roomRow: any, seatRows: any[], roundRows: any[]): Room {

@@ -197,17 +197,34 @@ export class PayoutService {
     }
 
     // Build outputs - refund each player with a wallet address
+    // Track refund details for database recording
     const outputs: any[] = []
+    const refundDetails: Array<{
+      seatIndex: number
+      depositAddress: string
+      walletAddress: string
+      depositTxId: string | null
+      amount: number
+    }> = []
+
     for (const seat of confirmedSeats) {
+      const amountKAS = Number(refundPerSeat) / SOMPI_PER_KAS
       outputs.push({
         address: new kaspaWasm.Address(seat.walletAddress!),
         amount: refundPerSeat
+      })
+      refundDetails.push({
+        seatIndex: seat.index,
+        depositAddress: seat.depositAddress,
+        walletAddress: seat.walletAddress!,
+        depositTxId: seat.depositTxId || null,
+        amount: amountKAS
       })
       logger.info('Adding refund output', {
         seatIndex: seat.index,
         address: seat.walletAddress,
         amountSompi: refundPerSeat.toString(),
-        amountKAS: Number(refundPerSeat) / SOMPI_PER_KAS
+        amountKAS
       })
     }
 
@@ -244,6 +261,28 @@ export class PayoutService {
 
     const txId = await kaspaClient.submitTransaction(tx)
     logger.info('Refund transaction submitted', { roomId, txId, refundCount: outputs.length })
+
+    // Record each refund in database (linked to original deposit)
+    for (const refund of refundDetails) {
+      store.createRefund({
+        roomId,
+        seatIndex: refund.seatIndex,
+        depositAddress: refund.depositAddress,
+        walletAddress: refund.walletAddress,
+        depositTxId: refund.depositTxId,
+        refundTxId: txId,
+        amount: refund.amount
+      })
+      logger.info('Refund recorded', {
+        roomId,
+        seatIndex: refund.seatIndex,
+        depositAddress: refund.depositAddress.slice(0, 20),
+        walletAddress: refund.walletAddress.slice(0, 20),
+        depositTxId: refund.depositTxId?.slice(0, 12),
+        refundTxId: txId.slice(0, 12),
+        amount: refund.amount
+      })
+    }
 
     return [txId]
   }

@@ -90,12 +90,28 @@ db.exec(`
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
   );
 
+  -- Refunds table (tracks refunds linked to original deposits)
+  CREATE TABLE IF NOT EXISTS refunds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL,
+    seat_index INTEGER NOT NULL,
+    deposit_address TEXT NOT NULL,
+    wallet_address TEXT NOT NULL,
+    deposit_tx_id TEXT,
+    refund_tx_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+  );
+
   -- Indexes for common queries
   CREATE INDEX IF NOT EXISTS idx_rooms_state ON rooms(state);
   CREATE INDEX IF NOT EXISTS idx_seats_room_id ON seats(room_id);
   CREATE INDEX IF NOT EXISTS idx_seats_wallet ON seats(wallet_address);
   CREATE INDEX IF NOT EXISTS idx_rounds_room_id ON rounds(room_id);
   CREATE INDEX IF NOT EXISTS idx_payouts_room_id ON payouts(room_id);
+  CREATE INDEX IF NOT EXISTS idx_refunds_room_id ON refunds(room_id);
+  CREATE INDEX IF NOT EXISTS idx_refunds_wallet ON refunds(wallet_address);
 `)
 
 // Migration: Add deposit_address column if it doesn't exist (for existing databases)
