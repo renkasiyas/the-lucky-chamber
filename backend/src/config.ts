@@ -51,7 +51,7 @@ export const config: Config & { botsEnabled: boolean } = {
   walletMnemonic: getEnv('WALLET_MNEMONIC'),
   treasuryAddress: getEnv('TREASURY_ADDRESS'),
   houseCutPercent: getEnvNumber('HOUSE_CUT_PERCENT', 5),
-  port: getEnvNumber('PORT', 3001),
+  port: getEnvNumber('PORT', 4201),
   botsEnabled: getEnvBoolean('BOTS_ENABLED', false),
 }
 

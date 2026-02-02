@@ -22,8 +22,8 @@ RUN npm ci
 FROM base AS builder
 
 # Build-time args for Next.js public env vars
-ARG NEXT_PUBLIC_API_URL=http://localhost:3001
-ARG NEXT_PUBLIC_WS_URL=ws://localhost:3001
+ARG NEXT_PUBLIC_API_URL=http://localhost:4201
+ARG NEXT_PUBLIC_WS_URL=ws://localhost:4202
 
 # Copy shared types
 COPY shared/ ./shared/
@@ -60,9 +60,9 @@ COPY --from=builder --chown=nextjs:nodejs /build/frontend/.next/static ./.next/s
 
 USER nextjs
 
-EXPOSE 3000
+EXPOSE 4200
 
-ENV PORT=3000
+ENV PORT=4200
 ENV HOSTNAME="0.0.0.0"
 
 CMD ["node", "server.js"]
