@@ -1,5 +1,5 @@
-# ABOUTME: Docker Compose configuration for The Lucky Chamber
-# ABOUTME: Orchestrates backend and frontend services for development/production
+# ABOUTME: Docker Compose configuration for production environment
+# ABOUTME: Uses mainnet, bots disabled, production settings
 
 services:
   backend:
@@ -11,13 +11,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
-      - NETWORK=${NETWORK:-testnet-10}
+      - NETWORK=${NETWORK:-mainnet}
       - WALLET_MNEMONIC=${WALLET_MNEMONIC}
       - TREASURY_ADDRESS=${TREASURY_ADDRESS}
       - HOUSE_CUT_PERCENT=${HOUSE_CUT_PERCENT:-5}
       - BOTS_ENABLED=${BOTS_ENABLED:-false}
-      - MIN_CONFIRMATIONS=${MIN_CONFIRMATIONS:-1}
-      - SETTLEMENT_BLOCK_OFFSET=${SETTLEMENT_BLOCK_OFFSET:-5}
+      - MIN_CONFIRMATIONS=${MIN_CONFIRMATIONS:-10}
+      - SETTLEMENT_BLOCK_OFFSET=${SETTLEMENT_BLOCK_OFFSET:-10}
     volumes:
       - backend_data:/app/data
     restart: unless-stopped
@@ -33,8 +33,8 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3001}
-        - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-ws://localhost:3001}
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+        - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL}
     ports:
       - "3000:3000"
     environment:

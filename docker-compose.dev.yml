@@ -1,5 +1,5 @@
-# ABOUTME: Docker Compose configuration for The Lucky Chamber
-# ABOUTME: Orchestrates backend and frontend services for development/production
+# ABOUTME: Docker Compose configuration for dev environment
+# ABOUTME: Uses testnet-10, bots enabled, standard ports
 
 services:
   backend:
@@ -15,7 +15,7 @@ services:
       - WALLET_MNEMONIC=${WALLET_MNEMONIC}
       - TREASURY_ADDRESS=${TREASURY_ADDRESS}
       - HOUSE_CUT_PERCENT=${HOUSE_CUT_PERCENT:-5}
-      - BOTS_ENABLED=${BOTS_ENABLED:-false}
+      - BOTS_ENABLED=${BOTS_ENABLED:-true}
       - MIN_CONFIRMATIONS=${MIN_CONFIRMATIONS:-1}
       - SETTLEMENT_BLOCK_OFFSET=${SETTLEMENT_BLOCK_OFFSET:-5}
     volumes:
