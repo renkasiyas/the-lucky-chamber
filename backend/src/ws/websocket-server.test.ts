@@ -105,7 +105,7 @@ describe('WSServer', () => {
     vi.mocked(roomManager.getRoom).mockImplementation((id) => mockRooms.get(id))
     vi.mocked(roomManager.getAllRooms).mockImplementation(() => Array.from(mockRooms.values()))
     vi.mocked(roomManager.joinRoom).mockReturnValue({
-      seat: { index: 0, walletAddress: '', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      seat: { index: 0, walletAddress: '', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
       depositAddress: 'kaspatest:addr',
     })
 
@@ -357,7 +357,7 @@ describe('WSServer', () => {
       mockRooms.set('test-room-id', {
         ...createMockRoom('test-room-id'),
         state: RoomState.FUNDING,
-        seats: [{ walletAddress: 'kaspatest:wallet1', index: 0, depositAddress: 'kaspatest:seat0deposit', clientSeed: null, depositTxId: null, amount: 0, confirmed: false, alive: true, knsName: null, avatarUrl: null }],
+        seats: [{ walletAddress: 'kaspatest:wallet1', index: 0, depositAddress: 'kaspatest:seat0deposit', clientSeed: null, depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, alive: true, knsName: null, avatarUrl: null }],
       })
     })
 

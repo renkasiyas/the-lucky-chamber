@@ -67,8 +67,8 @@ describe('DepositMonitor', () => {
     payoutTxId: null,
     currentTurnSeatIndex: null,
     seats: [
-      { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
-      { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      { index: 0, walletAddress: 'kaspatest:wallet1', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      { index: 1, walletAddress: 'kaspatest:wallet2', depositAddress: 'kaspatest:seat1deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
     ],
     rounds: [],
     ...overrides,

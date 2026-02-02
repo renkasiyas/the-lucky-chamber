@@ -21,6 +21,10 @@ RUN npm ci
 # Builder stage
 FROM base AS builder
 
+# Build-time args for Next.js public env vars
+ARG NEXT_PUBLIC_API_URL=http://localhost:3001
+ARG NEXT_PUBLIC_WS_URL=ws://localhost:3001
+
 # Copy shared types
 COPY shared/ ./shared/
 
@@ -32,6 +36,8 @@ WORKDIR /build/frontend
 
 # Set build-time environment variables
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 
 # Build the application
 RUN npm run build

@@ -138,6 +138,19 @@ try {
   logger.error('Migration failed (current_turn_seat_index)', { error: error?.message || String(error) })
 }
 
+// Migration: Add confirmed_at column to seats table (determines turn order by payment time)
+try {
+  const seatColumns = db.prepare("PRAGMA table_info(seats)").all() as Array<{ name: string }>
+  const hasConfirmedAt = seatColumns.some(col => col.name === 'confirmed_at')
+  if (!hasConfirmedAt) {
+    logger.info('Migrating database: adding confirmed_at column to seats table')
+    db.exec(`ALTER TABLE seats ADD COLUMN confirmed_at INTEGER;`)
+    logger.info('Migration complete: confirmed_at column added')
+  }
+} catch (error: any) {
+  logger.error('Migration failed (confirmed_at)', { error: error?.message || String(error) })
+}
+
 logger.info('SQLite database initialized', { path: DB_PATH })
 
 // Graceful shutdown

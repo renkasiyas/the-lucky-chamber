@@ -92,13 +92,28 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   const timeouts = useRef<NodeJS.Timeout[]>([])
   const lastProcessedRound = useRef(room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1)
   const barrelAngle = useRef(0)
-  const hammerOrbitAngle = useRef((room.currentTurnSeatIndex ?? 0) * 60) // Track cumulative rotation
+  // Compute initial payment position for hammer (before useMemo runs)
+  const initialPaymentPosition = (() => {
+    if (room.currentTurnSeatIndex === null) return 0
+    const sorted = [...room.seats].sort((a, b) => {
+      if (a.confirmed && b.confirmed) return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
+      if (a.confirmed) return -1
+      if (b.confirmed) return 1
+      return a.index - b.index
+    })
+    return sorted.findIndex(s => s.index === room.currentTurnSeatIndex)
+  })()
+  const hammerOrbitAngle = useRef(initialPaymentPosition * 60) // Track cumulative rotation
   const hasSpunThisTurn = useRef(false)
   const recentlySpun = useRef(false) // Prevent double spin after respin
   const spectatorSequenceRunning = useRef(false) // Prevent duplicate spectator sequences
   // If game is already PLAYING on mount, we likely reloaded mid-game - skip spin animation
   const mountedDuringGame = useRef(room.state === 'PLAYING')
   const triggerPullTime = useRef<number>(0) // Track when trigger was pulled for timing
+
+  // Stable function refs to avoid dependency array issues causing infinite re-renders
+  const rotateHammerToSeatRef = useRef<(paymentPosition: number, duration?: number) => void>(() => {})
+  const startMyTurnRef = useRef<() => void>(() => {})
 
   const { play, stop, stopAll } = useSound()
 
@@ -118,6 +133,38 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   )
   const aliveCount = room.seats.filter(s => s.alive).length
   const latestRound = room.rounds[room.rounds.length - 1]
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PAYMENT ORDER - Seat numbers reflect payment order (first payer = seat 1)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Sort seats by confirmedAt (payment time) - first payer is position 0
+  const sortedSeats = useMemo(() => {
+    return [...room.seats].sort((a, b) => {
+      // Both confirmed: sort by confirmedAt
+      if (a.confirmed && b.confirmed) {
+        return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
+      }
+      // Only a confirmed: a comes first
+      if (a.confirmed) return -1
+      // Only b confirmed: b comes first
+      if (b.confirmed) return 1
+      // Neither confirmed: sort by join order (seat.index)
+      return a.index - b.index
+    })
+  }, [room.seats])
+
+  // Map seat.index to payment position (0-based) for chamber positioning
+  const seatIndexToPaymentPosition = useMemo(() => {
+    const map = new Map<number, number>()
+    sortedSeats.forEach((seat, position) => {
+      map.set(seat.index, position)
+    })
+    return map
+  }, [sortedSeats])
+
+  // Get payment position for the visual shooter (for hammer and indicators)
+  const visualShooterPaymentPosition = seatIndexToPaymentPosition.get(visualShooterIndex) ?? 0
+  const serverShooterPaymentPosition = seatIndexToPaymentPosition.get(serverShooterIndex) ?? 0
 
   // ═══════════════════════════════════════════════════════════════════════════
   // UTILITIES
@@ -157,14 +204,14 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   }, [])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // ROTATE HAMMER TO TARGET SEAT - hammer orbits around chamber to point at shooter
+  // ROTATE HAMMER TO PAYMENT POSITION - hammer orbits around chamber to point at shooter
   // ═══════════════════════════════════════════════════════════════════════════
-  const rotateHammerToSeat = useCallback((seatIndex: number, duration: number = 0.6) => {
-    // Guard against invalid seat index (can happen when game not yet started)
-    if (seatIndex < 0 || seatIndex > 5) return
+  const rotateHammerToPaymentPosition = useCallback((paymentPosition: number, duration: number = 0.6) => {
+    // Guard against invalid position (can happen when game not yet started)
+    if (paymentPosition < 0 || paymentPosition > 5) return
 
-    // Each seat is 60° apart, seat 0 is at top (0° rotation)
-    const targetAngle = seatIndex * 60
+    // Each position is 60° apart, position 0 is at top (0° rotation)
+    const targetAngle = paymentPosition * 60
 
     // Calculate shortest path rotation (avoid spinning the long way around)
     const currentNormalized = hammerOrbitAngle.current % 360
@@ -185,6 +232,9 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       }
     })
   }, [hammerOrbitControls])
+
+  // Keep ref in sync for stable reference in useEffects
+  rotateHammerToSeatRef.current = rotateHammerToPaymentPosition
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SPIN THE BARREL
@@ -242,15 +292,15 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     if (mountedDuringGame.current || recentlySpun.current) {
       mountedDuringGame.current = false
       recentlySpun.current = false
-      // Snap hammer to position instantly on reload
-      rotateHammerToSeat(serverShooterIndex, 0)
+      // Snap hammer to payment position instantly on reload
+      rotateHammerToSeatRef.current(serverShooterPaymentPosition, 0)
       setPhase('ready')
       setCountdown(30)
       return
     }
 
-    // Rotate hammer to point at this seat
-    rotateHammerToSeat(serverShooterIndex)
+    // Rotate hammer to point at shooter's payment position
+    rotateHammerToSeatRef.current(serverShooterPaymentPosition)
 
     setPhase('spin')
 
@@ -259,7 +309,10 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       setPhase('ready')
       setCountdown(30)
     })
-  }, [clearTimeouts, stopAll, spinBarrel, serverShooterIndex, rotateHammerToSeat])
+  }, [clearTimeouts, stopAll, spinBarrel, serverShooterPaymentPosition])
+
+  // Keep ref in sync for stable reference in useEffects
+  startMyTurnRef.current = startMyTurn
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PULL TRIGGER - The moment of truth
@@ -398,8 +451,9 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     hasSpunThisTurn.current = false
     // Lock visual shooter to THIS round's shooter for the animation
     setVisualShooterIndex(shooterSeat)
-    // Rotate hammer to point at this seat
-    rotateHammerToSeat(shooterSeat)
+    // Rotate hammer to shooter's payment position
+    const shooterPaymentPosition = seatIndexToPaymentPosition.get(shooterSeat) ?? 0
+    rotateHammerToSeatRef.current(shooterPaymentPosition)
 
     // Phase 1: Spin
     setPhase('spin')
@@ -419,7 +473,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
         revealOutcome(died, shooterSeat, false) // false = not my reveal (spectating)
       }, TIMING.cockDuration)
     })
-  }, [clearTimeouts, stopAll, spinBarrel, play, hammerControls, schedule, revealOutcome, rotateHammerToSeat])
+  }, [clearTimeouts, stopAll, spinBarrel, play, hammerControls, schedule, revealOutcome, seatIndexToPaymentPosition])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HANDLE SERVER ROUND RESULTS
@@ -463,13 +517,13 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     if (['spin', 'pulling', 'reveal', 'respin'].includes(phase)) return
 
     if (isMyTurn && phase === 'idle') {
-      startMyTurn()
+      startMyTurnRef.current()
     } else if (!isMyTurn && phase === 'ready') {
       // Turn changed away from me
       setPhase('idle')
       hasSpunThisTurn.current = false
     }
-  }, [room.state, isMyTurn, phase, startMyTurn, serverShooterIndex])
+  }, [room.state, isMyTurn, phase, serverShooterIndex])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SYNC VISUAL SHOOTER ON IDLE - when not animating, keep visual in sync
@@ -483,9 +537,9 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     if (room.state !== 'PLAYING') return
     // Sync visual to server state
     setVisualShooterIndex(serverShooterIndex)
-    // Also rotate hammer to match (instant snap when idle)
-    rotateHammerToSeat(serverShooterIndex, 0.3)
-  }, [phase, activelyMyTurn, room.state, serverShooterIndex, rotateHammerToSeat])
+    // Also rotate hammer to shooter's payment position (instant snap when idle)
+    rotateHammerToSeatRef.current(serverShooterPaymentPosition, 0.3)
+  }, [phase, activelyMyTurn, room.state, serverShooterIndex, serverShooterPaymentPosition])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COUNTDOWN (only during ready phase)
@@ -763,23 +817,24 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
           </motion.div>
 
           {/* ══════════════════════════════════════════════════════════════════
-              SEAT POSITION INDICATORS (fixed positions, just highlight current)
+              SEAT POSITION INDICATORS - positions reflect PAYMENT ORDER (first payer = position 1)
               ══════════════════════════════════════════════════════════════════ */}
           <div className="absolute inset-0 pointer-events-none">
-            {[0, 1, 2, 3, 4, 5].map((i) => {
-              const angle = (i * 60 - 90) * (Math.PI / 180)
+            {[0, 1, 2, 3, 4, 5].map((paymentPosition) => {
+              const angle = (paymentPosition * 60 - 90) * (Math.PI / 180)
               const radius = 54
               const x = 50 + radius * Math.cos(angle)
               const y = 50 + radius * Math.sin(angle)
 
-              const seat = room.seats.find(s => s.index === i)
+              // Get seat at this payment position (sorted by confirmedAt)
+              const seat = sortedSeats[paymentPosition]
               const isMe = seat?.walletAddress === myAddress
-              const isShooter = i === visualShooterIndex // Use visual state, not server state
-              const isDead = visuallyDeadSeats.has(i) // Use visual state, not server state
+              const isShooter = paymentPosition === visualShooterPaymentPosition
+              const isDead = seat ? visuallyDeadSeats.has(seat.index) : false
 
               return (
                 <motion.div
-                  key={`indicator-${i}`}
+                  key={`indicator-${paymentPosition}`}
                   className="absolute -translate-x-1/2 -translate-y-1/2"
                   style={{ left: `${x}%`, top: `${y}%` }}
                   animate={{
@@ -799,7 +854,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                           : 'bg-smoke/40 text-ash/50 border border-edge/40'
                     }
                   `}>
-                    {isDead ? '×' : i + 1}
+                    {isDead ? '×' : paymentPosition + 1}
                   </div>
                   {isMe && !isDead && (
                     <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[7px] font-mono text-gold/80 uppercase tracking-wider">
@@ -817,7 +872,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
           <motion.div
             className="absolute inset-0 z-20 pointer-events-none"
             animate={hammerOrbitControls}
-            initial={{ rotate: (room.currentTurnSeatIndex ?? 0) * 60 }}
+            initial={{ rotate: serverShooterPaymentPosition * 60 }}
             style={{ transformOrigin: 'center center' }}
           >
             <div className="absolute -top-1 left-1/2 -translate-x-1/2">
@@ -870,10 +925,10 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                     animate={{ boxShadow: ['0 0 0 0 rgba(245,158,11,0.3)', '0 0 0 10px rgba(245,158,11,0)', '0 0 0 0 rgba(245,158,11,0)'] }}
                     transition={{ repeat: Infinity, duration: 2 }}
                   >
-                    <span className="font-display text-ember">{visualShooterIndex + 1}</span>
+                    <span className="font-display text-ember">{visualShooterPaymentPosition + 1}</span>
                   </motion.div>
                   <div className="text-left">
-                    <p className="text-chalk/90 font-display text-sm">Seat {visualShooterIndex + 1}</p>
+                    <p className="text-chalk/90 font-display text-sm">Seat {visualShooterPaymentPosition + 1}</p>
                     <p className="text-ash/40 text-[10px] font-mono">
                       {currentShooter.walletAddress?.slice(0, 6)}...{currentShooter.walletAddress?.slice(-4)}
                     </p>
@@ -922,7 +977,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                   SPINNING
                 </motion.p>
                 <p className="text-gold/60 text-xs font-mono uppercase tracking-wider">
-                  seat {visualShooterIndex + 1}&apos;s fate spins...
+                  seat {visualShooterPaymentPosition + 1}&apos;s fate spins...
                 </p>
               </motion.div>
             )}
@@ -970,7 +1025,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                 </button>
 
                 <p className="text-blood-light/60 text-xs font-mono uppercase tracking-wider">
-                  1 in {Math.max(1, 6 - room.rounds.length)} chance
+                  1 in 6 chance
                 </p>
               </motion.div>
             )}
@@ -989,7 +1044,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                   animate={{ opacity: [0.5, 1, 0.5], scale: [1, 1.05, 1] }}
                   transition={{ repeat: Infinity, duration: 0.6 }}
                 >
-                  {isMyTurn ? '...' : `SEAT ${visualShooterIndex + 1}...`}
+                  {isMyTurn ? '...' : `SEAT ${visualShooterPaymentPosition + 1}...`}
                 </motion.p>
 
                 {/* Heartbeat visualization */}
@@ -1029,7 +1084,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                 >
                   {visualShooterIndex === mySeat?.index
                     ? "💀 YOU'RE OUT"
-                    : `💀 SEAT ${visualShooterIndex + 1} ELIMINATED`}
+                    : `💀 SEAT ${visualShooterPaymentPosition + 1} ELIMINATED`}
                 </motion.p>
               </motion.div>
             )}
@@ -1060,7 +1115,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                 >
                   {visualShooterIndex === mySeat?.index
                     ? 'you survived!'
-                    : `seat ${visualShooterIndex + 1} survives`}
+                    : `seat ${visualShooterPaymentPosition + 1} survives`}
                 </motion.p>
               </motion.div>
             )}

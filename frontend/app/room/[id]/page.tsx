@@ -22,10 +22,18 @@ import type { Room, Seat } from '../../../../shared/index'
 import { formatKAS } from '../../../lib/format'
 import config from '../../../lib/config'
 
-function getSeatStatus(seat: Seat | undefined, roomState: string): 'empty' | 'joined' | 'deposited' | 'confirmed' | 'alive' | 'dead' {
+function getSeatStatus(
+  seat: Seat | undefined,
+  roomState: string,
+  visuallyDeadSeats?: Set<number>
+): 'empty' | 'joined' | 'deposited' | 'confirmed' | 'alive' | 'dead' {
   if (!seat) return 'empty'
   if (!seat.walletAddress) return 'empty'
   if (roomState === 'PLAYING' || roomState === 'SETTLED') {
+    // During gameplay, use visual state to prevent spoilers before animation completes
+    if (visuallyDeadSeats) {
+      return visuallyDeadSeats.has(seat.index) ? 'dead' : 'alive'
+    }
     return seat.alive ? 'alive' : 'dead'
   }
   if (seat.confirmed) return 'confirmed'
@@ -54,6 +62,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [depositSent, setDepositSent] = useState(false)
   const [retryingDeposit, setRetryingDeposit] = useState(false)
   const [lockCountdown, setLockCountdown] = useState<number | null>(null)
+  // Visual dead seats - only updates AFTER death animation completes to prevent spoilers
+  const [visuallyDeadSeats, setVisuallyDeadSeats] = useState<Set<number>>(new Set())
   const prevRoomStateRef = useRef<string | null>(null)
   const lockStartTimeRef = useRef<number | null>(null)
   const hasJoinedRef = useRef(false)
@@ -297,12 +307,17 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
   // Handler for when ChamberGame's death animation completes
   const handleDeathAnimationComplete = useCallback(() => {
+    // Sync visual dead seats with actual room state now that animation is done
+    if (room) {
+      const deadSeats = new Set(room.seats.filter(s => !s.alive).map(s => s.index))
+      setVisuallyDeadSeats(deadSeats)
+    }
     // If game is SETTLED and we were waiting, show victory now
     if (pendingVictoryRef.current) {
       pendingVictoryRef.current = false
       setShowGameFinished(true)
     }
-  }, [])
+  }, [room])
 
   // Detect game finished transition - wait for animation callback
   useEffect(() => {
@@ -325,6 +340,16 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     prevRoomStateRef.current = room.state
   }, [room?.state])
+
+  // Initialize visuallyDeadSeats on mount/room load (for page refresh with existing deaths)
+  useEffect(() => {
+    if (!room) return
+    // Only initialize if we're joining mid-game or game is settled
+    if (room.state === 'PLAYING' || room.state === 'SETTLED') {
+      const deadSeats = new Set(room.seats.filter(s => !s.alive).map(s => s.index))
+      setVisuallyDeadSeats(deadSeats)
+    }
+  }, [room?.id]) // Only run when room ID changes (initial load)
 
   // Countdown timer for LOCKED state (awaiting settlement block)
   useEffect(() => {
@@ -650,24 +675,48 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {Array.from({ length: room.maxPlayers }).map((_, i) => {
-                // Find seat by its logical index (stable after shuffle)
-                // The array order changes during shuffle but seat.index stays the same
-                const seat = room.seats.find(s => s.index === i)
-                const status = getSeatStatus(seat, room.state)
-                const isYou = seat?.walletAddress === address
+              {(() => {
+                // Sort seats by payment confirmation time (first to pay = position 1)
+                // Confirmed seats come first (sorted by confirmedAt), then unconfirmed by join order
+                const sortedSeats = [...room.seats].sort((a, b) => {
+                  // Both confirmed: sort by confirmedAt
+                  if (a.confirmed && b.confirmed) {
+                    return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
+                  }
+                  // Only a confirmed: a comes first
+                  if (a.confirmed) return -1
+                  // Only b confirmed: b comes first
+                  if (b.confirmed) return 1
+                  // Neither confirmed: sort by join order (seat.index)
+                  return a.index - b.index
+                })
 
-                return (
-                  <SeatRow
-                    key={i}
-                    index={i + 1}
-                    address={seat?.walletAddress}
-                    status={status}
-                    isYou={isYou}
-                    amount={seat?.amount}
-                  />
-                )
-              })}
+                // Create slots: filled seats first, then empty slots
+                const slots: (Seat | undefined)[] = []
+                for (let i = 0; i < room.maxPlayers; i++) {
+                  slots.push(sortedSeats[i])
+                }
+
+                return slots.map((seat, displayIndex) => {
+                  // Use visual dead state during gameplay to prevent spoilers
+                  const status = getSeatStatus(seat, room.state, visuallyDeadSeats)
+                  const isYou = seat?.walletAddress === address
+                  // Show payment position (displayIndex + 1) to match chamber visual numbers
+                  // Payment order: first to pay = seat 1, second to pay = seat 2, etc.
+                  const seatNumber = displayIndex + 1
+
+                  return (
+                    <SeatRow
+                      key={seat?.index ?? displayIndex}
+                      index={seatNumber}
+                      address={seat?.walletAddress}
+                      status={status}
+                      isYou={isYou}
+                      amount={seat?.amount}
+                    />
+                  )
+                })
+              })()}
             </div>
           </CardContent>
         </Card>
@@ -680,30 +729,44 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             </CardHeader>
             <CardContent>
               <div className="space-y-2 max-h-64 overflow-y-auto">
-                {room.rounds.map((round, i) => (
-                  <div
-                    key={i}
-                    className={`flex items-center gap-4 p-3 rounded-xl ${
-                      round.died
-                        ? 'bg-blood-muted border border-blood/30'
-                        : 'bg-smoke/50 border border-edge'
-                    }`}
-                  >
-                    <span className="text-xs font-mono text-ember">R{round.index + 1}</span>
-                    <div className="flex items-center gap-2">
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                        round.died
-                          ? 'bg-gradient-to-br from-blood to-blood/50'
-                          : 'bg-gradient-to-br from-gunmetal to-noir border border-edge'
-                      }`}>
-                        <span className="text-[10px] font-mono">{round.shooterSeatIndex + 1}</span>
+                {(() => {
+                  // Compute payment positions for game log display
+                  const sortedForLog = [...room.seats].sort((a, b) => {
+                    if (a.confirmed && b.confirmed) return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
+                    if (a.confirmed) return -1
+                    if (b.confirmed) return 1
+                    return a.index - b.index
+                  })
+                  const seatToPaymentPos = new Map(sortedForLog.map((s, i) => [s.index, i + 1]))
+
+                  return room.rounds.map((round, i) => {
+                    const paymentPos = seatToPaymentPos.get(round.shooterSeatIndex) ?? round.shooterSeatIndex + 1
+                    return (
+                      <div
+                        key={i}
+                        className={`flex items-center gap-4 p-3 rounded-xl ${
+                          round.died
+                            ? 'bg-blood-muted border border-blood/30'
+                            : 'bg-smoke/50 border border-edge'
+                        }`}
+                      >
+                        <span className="text-xs font-mono text-ember">R{round.index + 1}</span>
+                        <div className="flex items-center gap-2">
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                            round.died
+                              ? 'bg-gradient-to-br from-blood to-blood/50'
+                              : 'bg-gradient-to-br from-gunmetal to-noir border border-edge'
+                          }`}>
+                            <span className="text-[10px] font-mono">{paymentPos}</span>
+                          </div>
+                        </div>
+                        <span className={`font-display tracking-wider ${round.died ? 'text-blood-light' : 'text-alive-light'}`}>
+                          {round.died ? 'BANG!' : 'click'}
+                        </span>
                       </div>
-                    </div>
-                    <span className={`font-display tracking-wider ${round.died ? 'text-blood-light' : 'text-alive-light'}`}>
-                      {round.died ? 'BANG!' : 'click'}
-                    </span>
-                  </div>
-                ))}
+                    )
+                  })
+                })()}
               </div>
             </CardContent>
           </Card>
@@ -720,17 +783,31 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
               <div>
                 <span className="text-[10px] font-mono text-ember uppercase tracking-wider">Survivors</span>
                 <div className="flex flex-wrap gap-2 mt-2">
-                  {room.seats
-                    .filter((s) => s.alive)
-                    .map((s) => (
-                      <span
-                        key={s.index}
-                        className="px-3 py-1.5 bg-alive-muted border border-alive/30 text-alive-light rounded-full text-sm font-mono"
-                      >
-                        Seat {s.index + 1}
-                        {s.walletAddress === address && ' (You!)'}
-                      </span>
-                    ))}
+                  {(() => {
+                    // Compute payment positions for survivors display
+                    const sortedForSurvivors = [...room.seats].sort((a, b) => {
+                      if (a.confirmed && b.confirmed) return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
+                      if (a.confirmed) return -1
+                      if (b.confirmed) return 1
+                      return a.index - b.index
+                    })
+                    const seatToPaymentPos = new Map(sortedForSurvivors.map((s, i) => [s.index, i + 1]))
+
+                    return room.seats
+                      .filter((s) => s.alive)
+                      .map((s) => {
+                        const paymentPos = seatToPaymentPos.get(s.index) ?? s.index + 1
+                        return (
+                          <span
+                            key={s.index}
+                            className="px-3 py-1.5 bg-alive-muted border border-alive/30 text-alive-light rounded-full text-sm font-mono"
+                          >
+                            Seat {paymentPos}
+                            {s.walletAddress === address && ' (You!)'}
+                          </span>
+                        )
+                      })
+                  })()}
                 </div>
               </div>
 

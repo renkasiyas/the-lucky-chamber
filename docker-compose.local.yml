@@ -11,11 +11,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3001
-      - KASPA_NETWORK=testnet-10
-      - KASPA_RPC_URL=${KASPA_RPC_URL:-wss://testnet-10.kaspa.ws/wrpc/borsh}
+      - NETWORK=${NETWORK:-testnet-10}
       - WALLET_MNEMONIC=${WALLET_MNEMONIC}
       - TREASURY_ADDRESS=${TREASURY_ADDRESS}
       - HOUSE_CUT_PERCENT=${HOUSE_CUT_PERCENT:-5}
+      - BOTS_ENABLED=${BOTS_ENABLED:-false}
+      - MIN_CONFIRMATIONS=${MIN_CONFIRMATIONS:-1}
+      - SETTLEMENT_BLOCK_OFFSET=${SETTLEMENT_BLOCK_OFFSET:-5}
     volumes:
       - backend_data:/app/data
     restart: unless-stopped

@@ -62,7 +62,7 @@ describe('QueueManager', () => {
       rounds: [],
     })
     vi.mocked(roomManager.joinRoom).mockReturnValue({
-      seat: { index: 0, walletAddress: '', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+      seat: { index: 0, walletAddress: '', depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
       depositAddress: 'kaspatest:addr',
     })
   })
@@ -113,7 +113,13 @@ describe('QueueManager', () => {
       queueManager.joinQueue('kaspatest:wallet1', GameMode.REGULAR, 10)
       queueManager.joinQueue('kaspatest:wallet2', GameMode.REGULAR, 10)
 
-      expect(callback).toHaveBeenCalledWith('auto-room-123', ['kaspatest:wallet1', 'kaspatest:wallet2'])
+      // Players are shuffled before joining, so check both are present regardless of order
+      expect(callback).toHaveBeenCalledWith(
+        'auto-room-123',
+        expect.arrayContaining(['kaspatest:wallet1', 'kaspatest:wallet2'])
+      )
+      const calledWith = callback.mock.calls[0][1]
+      expect(calledWith).toHaveLength(2)
     })
 
     it('should emit queue update callback', () => {
@@ -131,7 +137,7 @@ describe('QueueManager', () => {
           throw new Error('Join failed')
         }
         return {
-          seat: { index: 0, walletAddress: wallet, depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
+          seat: { index: 0, walletAddress: wallet, depositAddress: 'kaspatest:seat0deposit', depositTxId: null, amount: 0, confirmed: false, confirmedAt: null, clientSeed: null, alive: true, knsName: null, avatarUrl: null },
           depositAddress: 'kaspatest:addr',
         }
       })

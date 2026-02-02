@@ -16,15 +16,15 @@ WORKDIR /build
 # Copy shared package first (preserving relative path structure)
 COPY shared/ ./shared/
 
+# Copy vendored kaspa-wasm
+COPY vendor/ ./vendor/
+
 # Copy backend
 COPY backend/ ./backend/
 
-# Patch kaspa-wasm to use npm version instead of local path
-RUN sed -i 's|"kaspa-wasm": "file:[^"]*"|"kaspa-wasm": "^0.13.0"|g' backend/package.json
-
 # Install dependencies from backend directory
 WORKDIR /build/backend
-RUN npm ci
+RUN npm install
 
 # Build TypeScript (compiles both backend and shared to dist/)
 RUN npm run build
@@ -36,6 +36,10 @@ WORKDIR /app
 # Copy package files and install production deps
 # Copy node_modules from base (includes pre-compiled native modules)
 COPY --from=base /build/backend/node_modules ./node_modules
+
+# Replace kaspa-wasm symlink with actual files
+RUN rm -rf /app/node_modules/kaspa-wasm
+COPY --from=base /build/vendor/kaspa-wasm ./node_modules/kaspa-wasm
 
 # Copy package.json for reference
 COPY --from=base /build/backend/package*.json ./

@@ -214,6 +214,7 @@ export class RoomManager {
       depositTxId: null,
       amount: 0,
       confirmed: false,
+      confirmedAt: null,
       clientSeed: null,
       alive: true,
       knsName: null,
@@ -369,6 +370,7 @@ export class RoomManager {
     seat.depositTxId = txId
     seat.amount = amount
     seat.confirmed = true
+    seat.confirmedAt = Date.now()
 
     store.updateSeat(roomId, seatIndex, seat)
     logRoomEvent('Deposit confirmed', roomId, { seatIndex, amount, txId })
@@ -498,11 +500,8 @@ export class RoomManager {
       throw new Error('Room not locked')
     }
 
-    // Shuffle seats before starting for fairness (using server seed for determinism)
-    this.shuffleSeats(room)
-    logRoomEvent('Seats shuffled', roomId, {
-      newOrder: room.seats.map(s => ({ index: s.index, addr: s.walletAddress?.slice(-8) }))
-    })
+    // Turn order follows seat join order (seat 0 → 1 → 2 → ... → 5)
+    // No shuffle - players shoot in the order they joined
 
     room.state = RoomState.PLAYING
     store.updateRoom(roomId, room)
@@ -578,33 +577,62 @@ export class RoomManager {
       totalChambers
     )
 
+    // Precompute original turn order (all seats sorted by payment confirmation time)
+    // This order is stable throughout the game - we cycle through it, skipping dead players
+    const originalTurnOrder = [...room.seats].sort((a, b) => {
+      const aTime = a.confirmedAt ?? a.index
+      const bTime = b.confirmedAt ?? b.index
+      return aTime - bTime
+    })
+
+    // Track previous shooter's seat.index for proper rotation after deaths
+    let lastShooterSeatIndex: number | null = null
+
     while (true) {
-      const aliveSeats = room.seats.filter((s) => s.alive)
-      if (aliveSeats.length <= 0) {
+      const aliveCount = room.seats.filter((s) => s.alive).length
+      if (aliveCount <= 0) {
         logger.error('No alive seats in room', { roomId })
         break
       }
 
       // Check win condition
-      if (room.mode === GameMode.REGULAR && aliveSeats.length < room.seats.length) {
+      if (room.mode === GameMode.REGULAR && aliveCount < room.seats.length) {
         // First death - game ends
         logRoomEvent('Game ended (Regular mode)', roomId)
         break
       }
 
-      if (room.mode === GameMode.EXTREME && aliveSeats.length === 1) {
+      if (room.mode === GameMode.EXTREME && aliveCount === 1) {
         // Last survivor - game ends
         logRoomEvent('Game ended (Extreme mode)', roomId)
         break
       }
 
-      // Pick shooter (rotate among alive players)
-      const shooterSeatIndex = aliveSeats[roundIndex % aliveSeats.length].index
-      // Use .find() since shooterSeatIndex is the stable seat.index, not array position
-      const shooter = room.seats.find(s => s.index === shooterSeatIndex)!
-      if (!shooter) {
-        throw new Error(`Shooter seat ${shooterSeatIndex} not found`)
+      // Pick next shooter: find next alive player after last shooter in original payment order
+      // This ensures proper rotation even when players die (no skipping)
+      let shooter: Seat | undefined
+      if (lastShooterSeatIndex === null) {
+        // First round: start with first alive player in payment order
+        shooter = originalTurnOrder.find((s) => s.alive)
+      } else {
+        // Find last shooter's position in original order, then find next alive player
+        const lastPos = originalTurnOrder.findIndex((s) => s.index === lastShooterSeatIndex)
+        for (let i = 1; i <= originalTurnOrder.length; i++) {
+          const candidate = originalTurnOrder[(lastPos + i) % originalTurnOrder.length]
+          if (candidate.alive) {
+            shooter = candidate
+            break
+          }
+        }
       }
+
+      if (!shooter) {
+        logger.error('Could not find next shooter', { roomId, lastShooterSeatIndex })
+        break
+      }
+
+      const shooterSeatIndex = shooter.index
+      lastShooterSeatIndex = shooterSeatIndex
 
       // Store pending game state for trigger pull
       const pendingState: PendingGameState = {
@@ -867,43 +895,6 @@ export class RoomManager {
     if (this.onRoomCompleted) {
       this.onRoomCompleted(roomId)
     }
-  }
-
-  /**
-   * Shuffle seats using Fisher-Yates algorithm seeded by server seed
-   * This ensures deterministic, provably fair seat ordering
-   */
-  private shuffleSeats(room: Room): void {
-    const serverSeed = this.serverSeeds.get(room.id)
-    if (!serverSeed) {
-      logger.warn('No server seed for shuffle, using random', { roomId: room.id })
-    }
-
-    // Create a seeded pseudo-random function from server seed
-    const seedStr = serverSeed || `${room.id}-${Date.now()}`
-    let seedNum = 0
-    for (let i = 0; i < seedStr.length; i++) {
-      seedNum = ((seedNum << 5) - seedNum + seedStr.charCodeAt(i)) | 0
-    }
-
-    const seededRandom = () => {
-      seedNum = (seedNum * 1103515245 + 12345) & 0x7fffffff
-      return seedNum / 0x7fffffff
-    }
-
-    // Fisher-Yates shuffle - reorders the array but preserves original seat.index
-    // This ensures seat.index always matches the depositAddress derivation path
-    const seats = room.seats
-    for (let i = seats.length - 1; i > 0; i--) {
-      const j = Math.floor(seededRandom() * (i + 1))
-      // Swap seats
-      ;[seats[i], seats[j]] = [seats[j], seats[i]]
-    }
-
-    // NOTE: Do NOT reassign seat.index after shuffle!
-    // The seat.index is tied to depositAddress (derived from roomId + original index).
-    // Changing it would break deposit tracking. The array order determines shooter
-    // sequence, but seat.index remains stable for deposit address correlation.
   }
 
   /**

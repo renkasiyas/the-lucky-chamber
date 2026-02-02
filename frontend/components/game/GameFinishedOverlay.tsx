@@ -397,7 +397,12 @@ export function GameFinishedOverlay({
                   <div className="flex justify-center items-center gap-3 flex-wrap">
                     {room.seats
                       .filter(s => s.walletAddress)
-                      .sort((a, b) => a.index - b.index)
+                      .sort((a, b) => {
+                        // Sort by payment confirmation time (first payer = position 1)
+                        const aTime = a.confirmedAt ?? a.index
+                        const bTime = b.confirmedAt ?? b.index
+                        return aTime - bTime
+                      })
                       .map((seat, i) => {
                         const isDead = !seat.alive
                         const isMe = seat.walletAddress === myAddress
@@ -419,7 +424,7 @@ export function GameFinishedOverlay({
                                   : 'bg-gradient-to-br from-alive to-alive-light text-void shadow-[0_0_12px_rgba(16,185,129,0.4)]'
                               }
                             `}>
-                              {isDead ? '✕' : seat.index + 1}
+                              {isDead ? '✕' : i + 1}
                               {isMe && !isDead && (
                                 <motion.div
                                   className="absolute -inset-1 rounded-full border-2 border-gold/50"

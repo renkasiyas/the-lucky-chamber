@@ -61,9 +61,9 @@ class Store {
     const insertSeat = db.prepare(`
       INSERT INTO seats (
         room_id, seat_index, wallet_address, deposit_address, deposit_tx_id, amount, confirmed,
-        client_seed, alive, kns_name, avatar_url
+        confirmed_at, client_seed, alive, kns_name, avatar_url
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
     const transaction = db.transaction(() => {
@@ -96,6 +96,7 @@ class Store {
           seat.depositTxId || null,
           seat.amount || 0,
           seat.confirmed ? 1 : 0,
+          seat.confirmedAt || null,
           seat.clientSeed || null,
           seat.alive ? 1 : 0,
           seat.knsName || null,
@@ -161,9 +162,9 @@ class Store {
     db.prepare(`
       INSERT INTO seats (
         room_id, seat_index, wallet_address, deposit_address, deposit_tx_id, amount, confirmed,
-        client_seed, alive, kns_name, avatar_url
+        confirmed_at, client_seed, alive, kns_name, avatar_url
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       roomId,
       seat.index,
@@ -172,6 +173,7 @@ class Store {
       seat.depositTxId || null,
       seat.amount || 0,
       seat.confirmed ? 1 : 0,
+      seat.confirmedAt || null,
       seat.clientSeed || null,
       seat.alive ? 1 : 0,
       seat.knsName || null,
@@ -223,6 +225,10 @@ class Store {
     if (updates.confirmed !== undefined) {
       fields.push('confirmed = ?')
       values.push(updates.confirmed ? 1 : 0)
+    }
+    if (updates.confirmedAt !== undefined) {
+      fields.push('confirmed_at = ?')
+      values.push(updates.confirmedAt)
     }
     if (updates.alive !== undefined) {
       fields.push('alive = ?')
@@ -367,6 +373,7 @@ class Store {
         depositTxId: seat.deposit_tx_id || null,
         amount: seat.amount || 0,
         confirmed: !!seat.confirmed,
+        confirmedAt: seat.confirmed_at || null,
         clientSeed: seat.client_seed || null,
         alive: !!seat.alive,
         knsName: seat.kns_name || null,

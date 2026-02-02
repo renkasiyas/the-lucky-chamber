@@ -79,6 +79,7 @@ export interface Seat {
   depositTxId: string | null // Actual transaction ID from blockchain
   amount: number
   confirmed: boolean
+  confirmedAt: number | null // Timestamp when deposit was confirmed (determines turn order)
   clientSeed: string | null
   alive: boolean
   knsName: string | null // KNS domain name (e.g. "player.kas")
