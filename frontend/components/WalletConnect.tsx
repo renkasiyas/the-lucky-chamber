@@ -132,27 +132,6 @@ export function WalletConnect() {
         </div>
       )}
 
-      <p className="text-xs text-ember text-center mt-4">
-        Compatible wallets:{' '}
-        <a
-          href="https://kasware.xyz"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-gold hover:text-gold-light underline underline-offset-2"
-        >
-          Kasware
-        </a>
-        {' '}&{' '}
-        <a
-          href="https://kasanova.io"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-gold hover:text-gold-light underline underline-offset-2"
-        >
-          Kasanova
-        </a>
-      </p>
-
       <WalletSelectionModal isOpen={showWalletModal} onClose={closeWalletModal} />
     </div>
   )
