@@ -6,7 +6,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Room } from '../../../shared/index'
-import { formatKAS } from '../../lib/format'
+import { formatKAS, calculatePayouts } from '../../lib/format'
 import { useSound } from '../../hooks/useSound'
 import { ProvablyFairModal } from '../ui/ProvablyFairModal'
 
@@ -35,10 +35,13 @@ export function GameFinishedOverlay({
   const eliminated = room.seats.filter(s => s.walletAddress && !s.alive)
   const mySeat = room.seats.find(s => s.walletAddress === myAddress)
   const iAmSurvivor = mySeat?.alive ?? false
-  const pot = room.seats.filter(s => s.confirmed).length * room.seatPrice
-  const houseCut = pot * (room.houseCutPercent / 100)
-  const payoutPool = pot - houseCut
-  const perSurvivor = survivors.length > 0 ? payoutPool / survivors.length : 0
+  const confirmedCount = room.seats.filter(s => s.confirmed).length
+  const { pot, houseCut, payoutPool, perSurvivor } = calculatePayouts(
+    room.seatPrice,
+    confirmedCount,
+    room.houseCutPercent,
+    survivors.length
+  )
 
   // Generate confetti pieces once
   const confettiPieces = useMemo(() =>

@@ -19,7 +19,7 @@ import { useToast } from '../../../components/ui/Toast'
 import { ChamberGame } from '../../../components/game/ChamberGame'
 import { GameFinishedOverlay } from '../../../components/game/GameFinishedOverlay'
 import type { Room, Seat } from '../../../../shared/index'
-import { formatKAS } from '../../../lib/format'
+import { formatKAS, calculatePayouts } from '../../../lib/format'
 import config from '../../../lib/config'
 
 function getSeatStatus(
@@ -62,8 +62,12 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [depositSent, setDepositSent] = useState(false)
   const [retryingDeposit, setRetryingDeposit] = useState(false)
   const [lockCountdown, setLockCountdown] = useState<number | null>(null)
+  const [fundingCountdown, setFundingCountdown] = useState<number | null>(null)
   // Visual dead seats - only updates AFTER death animation completes to prevent spoilers
   const [visuallyDeadSeats, setVisuallyDeadSeats] = useState<Set<number>>(new Set())
+  // Revealed rounds - only add rounds to Game Log when animation reveals them
+  // Prevents spoilers where all results show immediately before animations play
+  const [revealedRounds, setRevealedRounds] = useState<Set<number>>(new Set())
   const prevRoomStateRef = useRef<string | null>(null)
   const lockStartTimeRef = useRef<number | null>(null)
   const hasJoinedRef = useRef(false)
@@ -160,6 +164,13 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       }
     })
 
+    const unsubPlayerForfeit = ws.subscribe('player:forfeit', (payload: { roomId: string; seatIndex: number; walletAddress: string }) => {
+      if (payload.roomId === roomId) {
+        toastRef.current.warning(`Seat ${payload.seatIndex + 1} disconnected`)
+        fetchRoomRef.current()
+      }
+    })
+
     return () => {
       unsubRoomUpdate()
       unsubGameStart()
@@ -167,6 +178,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       unsubGameEnd()
       unsubRngReveal()
       unsubTurnStart()
+      unsubPlayerForfeit()
     }
   }, [ws.connected, ws.subscribe, ws.send, roomId, address])
 
@@ -305,6 +317,12 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     }
   }
 
+  // Handler for when ChamberGame visually reveals a round (for Game Log sync)
+  // Prevents Game Log from spoiling results before the animation plays
+  const handleRoundRevealed = useCallback((roundIndex: number) => {
+    setRevealedRounds(prev => new Set([...prev, roundIndex]))
+  }, [])
+
   // Handler for when ChamberGame's death animation completes
   const handleDeathAnimationComplete = useCallback(() => {
     // Sync visual dead seats with actual room state now that animation is done
@@ -350,6 +368,37 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       setVisuallyDeadSeats(deadSeats)
     }
   }, [room?.id]) // Only run when room ID changes (initial load)
+
+  // Initialize revealedRounds on mount/room load (for page refresh - show past rounds)
+  // This allows players joining mid-game to see the Game Log immediately
+  // New rounds that arrive via WebSocket will be added only when their animation completes
+  useEffect(() => {
+    if (!room) return
+    // Only initialize if there are rounds to show
+    if (room.rounds.length > 0) {
+      const roundIndices = new Set(room.rounds.map(r => r.index))
+      setRevealedRounds(roundIndices)
+    }
+  }, [room?.id]) // Only run when room ID changes (initial load)
+
+  // Countdown timer for FUNDING state (room expiration timeout)
+  useEffect(() => {
+    if (!room) return
+
+    if (room.state === 'LOBBY' || room.state === 'FUNDING') {
+      const updateCountdown = () => {
+        const remaining = Math.max(0, Math.floor((room.expiresAt - Date.now()) / 1000))
+        setFundingCountdown(remaining)
+      }
+
+      updateCountdown()
+      const interval = setInterval(updateCountdown, 1000)
+
+      return () => clearInterval(interval)
+    } else {
+      setFundingCountdown(null)
+    }
+  }, [room?.state, room?.expiresAt])
 
   // Countdown timer for LOCKED state (awaiting settlement block)
   useEffect(() => {
@@ -407,13 +456,23 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
   const mySeat = room.seats.find((s) => s.walletAddress === address)
   const isInRoom = !!mySeat
-  const currentStep = getStepFromState(room.state, isInRoom, mySeat?.confirmed || false)
-  const pot = room.seats.filter(s => s.confirmed).length * room.seatPrice
-  const houseCut = pot * (room.houseCutPercent / 100)
-  const payoutPool = pot - houseCut
+  // Don't advance to step 5 (RESULT) until death animation completes
+  // This prevents the StepHeader from spoiling the outcome before the reveal
+  // Exception: on page refresh during SETTLED state, show step 5 immediately (we missed the live animation)
+  const rawStep = getStepFromState(room.state, isInRoom, mySeat?.confirmed || false)
+  const isRefreshDuringSETTLED = prevRoomStateRef.current === null && room.state === 'SETTLED'
+  const currentStep = (rawStep === 5 && !showGameFinished && !isRefreshDuringSETTLED) ? 4 : rawStep
+  const confirmedCount = room.seats.filter(s => s.confirmed).length
+  const survivors = room.seats.filter(s => s.alive)
+  const { pot, houseCut, payoutPool, perSurvivor } = calculatePayouts(
+    room.seatPrice,
+    confirmedCount,
+    room.houseCutPercent,
+    survivors.length
+  )
 
   return (
-    <div className="min-h-screen bg-void pt-20 pb-8">
+    <div className="min-h-screen bg-void pt-14 md:pt-20 pb-4 md:pb-8">
       {/* Background effects */}
       <div className="fixed inset-0 bg-gradient-to-b from-void via-noir to-void pointer-events-none" />
       {room.state === 'PLAYING' && (
@@ -434,21 +493,21 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         />
       )}
 
-      <div className="relative z-10 max-w-4xl mx-auto px-4 space-y-6">
-        {/* Step Progress */}
-        <div className="animate-fade-in">
+      <div className="relative z-10 max-w-4xl mx-auto px-3 md:px-4 space-y-3 md:space-y-6">
+        {/* Step Progress - hidden on mobile during gameplay to save space */}
+        <div className={`animate-fade-in ${room.state === 'PLAYING' ? 'hidden md:block' : ''}`}>
           <StepHeader currentStep={currentStep} />
         </div>
 
-        {/* Back Button - larger touch target for mobile */}
+        {/* Back Button - compact on mobile, larger on desktop */}
         <button
           onClick={() => { play('click'); router.push('/lobby') }}
-          className="animate-fade-in inline-flex items-center gap-2 min-h-[44px] min-w-[44px] px-4 py-2 text-ash hover:text-chalk hover:bg-steel/50 rounded-lg transition-all duration-200 touch-manipulation"
+          className={`animate-fade-in inline-flex items-center gap-1.5 md:gap-2 min-h-[44px] min-w-[44px] px-2 md:px-4 py-1 md:py-2 text-ash hover:text-chalk hover:bg-steel/50 rounded-lg transition-all duration-200 touch-manipulation ${room.state === 'PLAYING' ? 'absolute top-0 left-0 z-20' : ''}`}
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
           </svg>
-          <span className="text-sm font-medium">Lobby</span>
+          <span className="text-xs md:text-sm font-medium">Lobby</span>
         </button>
 
         {/* Room Info Card */}
@@ -464,43 +523,28 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
               <ProvablyFairButton room={room} explorerBaseUrl={explorerUrl} />
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="bg-smoke/50 border border-edge p-4 rounded-xl">
-                <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Entry</span>
-                <span className="font-display text-xl text-gold">{room.seatPrice}</span>
-                <span className="text-xs text-ash ml-1">KAS</span>
+          <CardContent className="!p-3 md:!p-6">
+            <div className="grid grid-cols-4 gap-2 md:gap-3">
+              <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl">
+                <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">Entry</span>
+                <span className="font-display text-base md:text-xl text-gold">{room.seatPrice}</span>
+                <span className="text-[10px] md:text-xs text-ash ml-0.5 md:ml-1">KAS</span>
               </div>
-              <div className="bg-smoke/50 border border-edge p-4 rounded-xl">
-                <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Players</span>
-                <span className="font-display text-xl text-chalk">
+              <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl">
+                <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">Players</span>
+                <span className="font-display text-base md:text-xl text-chalk">
                   {room.seats.filter(s => s.confirmed).length}
                 </span>
-                <span className="text-xs text-ash">/{room.maxPlayers}</span>
+                <span className="text-[10px] md:text-xs text-ash">/{room.maxPlayers}</span>
               </div>
-              <div className="bg-smoke/50 border border-edge p-4 rounded-xl flex-1">
-                <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Pot</span>
-                <div className="flex items-baseline gap-2">
-                  <span className="font-display text-xl text-alive-light">{formatKAS(pot, 0)}</span>
-                  <span className="text-xs text-ash">/ {formatKAS(room.seatPrice * room.maxPlayers, 0)} KAS</span>
-                </div>
-                <div className="mt-2 h-2 bg-bg rounded-full overflow-hidden">
-                  <div
-                    className={`h-full bg-gradient-to-r from-alive to-alive-light rounded-full transition-all duration-700 ease-out ${
-                      room.seats.filter(s => s.confirmed).length > 0 &&
-                      room.seats.filter(s => s.confirmed).length < room.maxPlayers
-                        ? 'animate-pot-fill'
-                        : ''
-                    }`}
-                    style={{
-                      width: `${(room.seats.filter(s => s.confirmed).length / room.maxPlayers) * 100}%`,
-                    }}
-                  />
-                </div>
+              <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl">
+                <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">Pot</span>
+                <span className="font-display text-base md:text-xl text-alive-light">{formatKAS(pot, 0)}</span>
+                <span className="text-[10px] md:text-xs text-ash ml-0.5 hidden md:inline">KAS</span>
               </div>
-              <div className="bg-smoke/50 border border-edge p-4 rounded-xl">
-                <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">House</span>
-                <span className="font-display text-xl text-ember">{room.houseCutPercent}%</span>
+              <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl">
+                <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">House</span>
+                <span className="font-display text-base md:text-xl text-ember">{room.houseCutPercent}%</span>
               </div>
             </div>
           </CardContent>
@@ -528,15 +572,22 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         {isInRoom && !mySeat?.confirmed && !joining && depositSent && room.state !== 'ABORTED' && (
           <Card className="border-gold/30 bg-gold-muted">
             <CardContent>
-              <div className="flex items-center justify-center gap-3">
-                <div className="w-4 h-4 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-                <p className="text-gold font-mono text-sm uppercase tracking-wider">
-                  Waiting for blockchain confirmation...
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-4 h-4 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+                  <p className="text-gold font-mono text-sm uppercase tracking-wider">
+                    Waiting for blockchain confirmation...
+                  </p>
+                </div>
+                <p className="text-ash text-xs text-center">
+                  Your deposit was sent. This usually takes a few seconds.
                 </p>
+                {fundingCountdown !== null && fundingCountdown > 0 && (
+                  <p className="text-ash text-xs">
+                    Room expires in {fundingCountdown}s
+                  </p>
+                )}
               </div>
-              <p className="text-ash text-xs text-center mt-3">
-                Your deposit was sent. This usually takes a few seconds.
-              </p>
             </CardContent>
           </Card>
         )}
@@ -598,11 +649,18 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         {isInRoom && mySeat?.confirmed && room.state === 'FUNDING' && (
           <Card className="border-alive/30 bg-alive-muted">
             <CardContent>
-              <div className="flex items-center justify-center gap-3">
-                <div className="w-2 h-2 rounded-full bg-alive-light" />
-                <p className="text-alive-light font-mono text-sm uppercase tracking-wider">
-                  You&apos;re in! Waiting for other players...
-                </p>
+              <div className="flex flex-col items-center gap-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-alive-light" />
+                  <p className="text-alive-light font-mono text-sm uppercase tracking-wider">
+                    You&apos;re in! Waiting for other players...
+                  </p>
+                </div>
+                {fundingCountdown !== null && fundingCountdown > 0 && (
+                  <p className="text-ash text-xs">
+                    Room expires in {fundingCountdown}s
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -656,13 +714,14 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         {/* Keep ChamberGame mounted during SETTLED to let death animation complete */}
         {(room.state === 'PLAYING' || (room.state === 'SETTLED' && !showGameFinished)) && (
           <Card variant="danger" className="!bg-noir/80 border-blood/40">
-            <CardContent className="pt-6">
+            <CardContent className="!p-2 md:!p-6 !pt-3 md:!pt-6">
               <ChamberGame
                 room={room}
                 currentRound={room.rounds.length}
                 myAddress={address}
                 onPullTrigger={handlePullTrigger}
                 onFinalDeathAnimationComplete={handleDeathAnimationComplete}
+                onRoundRevealed={handleRoundRevealed}
               />
             </CardContent>
           </Card>
@@ -677,18 +736,11 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {(() => {
                 // Sort seats by payment confirmation time (first to pay = position 1)
-                // Confirmed seats come first (sorted by confirmedAt), then unconfirmed by join order
+                // Matches backend turn order logic exactly: confirmedAt ?? index
                 const sortedSeats = [...room.seats].sort((a, b) => {
-                  // Both confirmed: sort by confirmedAt
-                  if (a.confirmed && b.confirmed) {
-                    return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
-                  }
-                  // Only a confirmed: a comes first
-                  if (a.confirmed) return -1
-                  // Only b confirmed: b comes first
-                  if (b.confirmed) return 1
-                  // Neither confirmed: sort by join order (seat.index)
-                  return a.index - b.index
+                  const aTime = a.confirmedAt ?? a.index
+                  const bTime = b.confirmedAt ?? b.index
+                  return aTime - bTime
                 })
 
                 // Create slots: filled seats first, then empty slots
@@ -721,8 +773,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </CardContent>
         </Card>
 
-        {/* Game Log */}
-        {room.rounds.length > 0 && (
+        {/* Game Log - only show rounds that have been visually revealed to prevent spoilers */}
+        {revealedRounds.size > 0 && (
           <Card className="animate-slide-up" style={{ animationDelay: '0.25s', opacity: 0 }}>
             <CardHeader>
               <CardTitle>GAME LOG</CardTitle>
@@ -731,41 +783,44 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {(() => {
                   // Compute payment positions for game log display
+                  // Matches backend turn order logic exactly: confirmedAt ?? index
                   const sortedForLog = [...room.seats].sort((a, b) => {
-                    if (a.confirmed && b.confirmed) return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
-                    if (a.confirmed) return -1
-                    if (b.confirmed) return 1
-                    return a.index - b.index
+                    const aTime = a.confirmedAt ?? a.index
+                    const bTime = b.confirmedAt ?? b.index
+                    return aTime - bTime
                   })
                   const seatToPaymentPos = new Map(sortedForLog.map((s, i) => [s.index, i + 1]))
 
-                  return room.rounds.map((round, i) => {
-                    const paymentPos = seatToPaymentPos.get(round.shooterSeatIndex) ?? round.shooterSeatIndex + 1
-                    return (
-                      <div
-                        key={i}
-                        className={`flex items-center gap-4 p-3 rounded-xl ${
-                          round.died
-                            ? 'bg-blood-muted border border-blood/30'
-                            : 'bg-smoke/50 border border-edge'
-                        }`}
-                      >
-                        <span className="text-xs font-mono text-ember">R{round.index + 1}</span>
-                        <div className="flex items-center gap-2">
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                  // Filter to only show rounds that have been visually revealed
+                  return room.rounds
+                    .filter(round => revealedRounds.has(round.index))
+                    .map((round, i) => {
+                      const paymentPos = seatToPaymentPos.get(round.shooterSeatIndex) ?? round.shooterSeatIndex + 1
+                      return (
+                        <div
+                          key={i}
+                          className={`flex items-center gap-4 p-3 rounded-xl ${
                             round.died
-                              ? 'bg-gradient-to-br from-blood to-blood/50'
-                              : 'bg-gradient-to-br from-gunmetal to-noir border border-edge'
-                          }`}>
-                            <span className="text-[10px] font-mono">{paymentPos}</span>
+                              ? 'bg-blood-muted border border-blood/30'
+                              : 'bg-smoke/50 border border-edge'
+                          }`}
+                        >
+                          <span className="text-xs font-mono text-ember">R{round.index + 1}</span>
+                          <div className="flex items-center gap-2">
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                              round.died
+                                ? 'bg-gradient-to-br from-blood to-blood/50'
+                                : 'bg-gradient-to-br from-gunmetal to-noir border border-edge'
+                            }`}>
+                              <span className="text-[10px] font-mono">{paymentPos}</span>
+                            </div>
                           </div>
+                          <span className={`font-display tracking-wider ${round.died ? 'text-blood-light' : 'text-alive-light'}`}>
+                            {round.died ? 'BANG!' : 'click'}
+                          </span>
                         </div>
-                        <span className={`font-display tracking-wider ${round.died ? 'text-blood-light' : 'text-alive-light'}`}>
-                          {round.died ? 'BANG!' : 'click'}
-                        </span>
-                      </div>
-                    )
-                  })
+                      )
+                    })
                 })()}
               </div>
             </CardContent>
@@ -823,10 +878,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                 <div className="bg-smoke/50 border border-edge p-4 rounded-xl">
                   <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Per Survivor</span>
                   <span className="font-display text-2xl text-alive-light">
-                    {(() => {
-                      const survivors = room.seats.filter(s => s.alive).length
-                      return survivors > 0 ? formatKAS(payoutPool / survivors) : '0.00'
-                    })()}
+                    {formatKAS(perSurvivor)}
                   </span>
                   <span className="text-xs text-ash ml-1">KAS</span>
                 </div>

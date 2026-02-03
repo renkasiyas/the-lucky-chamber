@@ -161,6 +161,7 @@ export class RoomManager {
       depositAddress,
       lockHeight: null,
       settlementBlockHeight: null,
+      settlementBlockHash: null,
       serverCommit,
       serverSeed: null, // SECURITY: Don't expose until game ends!
       houseCutPercent: config.houseCutPercent,
@@ -544,6 +545,10 @@ export class RoomManager {
 
       blockHash = await kaspaClient.getBlockHashByHeight(BigInt(room.settlementBlockHeight))
       logRoomEvent('Settlement block hash retrieved', roomId, { blockHash })
+
+      // Store block hash in room for frontend RNG verification
+      room.settlementBlockHash = blockHash
+      store.updateRoom(roomId, { settlementBlockHash: blockHash })
     } catch (error) {
       logger.error(`Failed to fetch settlement block hash, aborting game`, { error, roomId })
       await this.abortRoom(roomId)

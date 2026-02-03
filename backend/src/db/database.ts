@@ -167,6 +167,19 @@ try {
   logger.error('Migration failed (confirmed_at)', { error: error?.message || String(error) })
 }
 
+// Migration: Add settlement_block_hash column for RNG verification
+try {
+  const roomColumns = db.prepare("PRAGMA table_info(rooms)").all() as Array<{ name: string }>
+  const hasSettlementBlockHash = roomColumns.some(col => col.name === 'settlement_block_hash')
+  if (!hasSettlementBlockHash) {
+    logger.info('Migrating database: adding settlement_block_hash column to rooms table')
+    db.exec(`ALTER TABLE rooms ADD COLUMN settlement_block_hash TEXT;`)
+    logger.info('Migration complete: settlement_block_hash column added')
+  }
+} catch (error: any) {
+  logger.error('Migration failed (settlement_block_hash)', { error: error?.message || String(error) })
+}
+
 logger.info('SQLite database initialized', { path: DB_PATH })
 
 // Graceful shutdown

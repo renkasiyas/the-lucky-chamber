@@ -53,6 +53,7 @@ describe('QueueManager', () => {
       depositAddress: 'kaspatest:addr',
       lockHeight: null,
       settlementBlockHeight: null,
+      settlementBlockHash: null,
       serverCommit: 'commit',
       serverSeed: null,
       houseCutPercent: 5,

@@ -19,6 +19,7 @@ describe('Store', () => {
     depositAddress: 'kaspatest:addr123',
     lockHeight: null,
     settlementBlockHeight: null,
+    settlementBlockHash: null,
     serverCommit: 'commit123',
     serverSeed: null,
     houseCutPercent: 5,

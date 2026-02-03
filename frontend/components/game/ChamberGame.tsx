@@ -14,6 +14,7 @@ interface ChamberGameProps {
   myAddress: string | null
   onPullTrigger?: () => void
   onFinalDeathAnimationComplete?: () => void // Called when the final death animation (game-ending) completes
+  onRoundRevealed?: (roundIndex: number) => void // Called when a round's outcome is visually revealed (for Game Log sync)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -61,7 +62,7 @@ const TIMING = {
   respinRotations: 2,
 } as const
 
-export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFinalDeathAnimationComplete }: ChamberGameProps) {
+export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFinalDeathAnimationComplete, onRoundRevealed }: ChamberGameProps) {
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
   // ═══════════════════════════════════════════════════════════════════════════
@@ -90,6 +91,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
 
   // Refs
   const timeouts = useRef<NodeJS.Timeout[]>([])
+  const spinTimeout = useRef<NodeJS.Timeout | null>(null) // Separate ref for spin callback - never cleared by revealOutcome
   const lastProcessedRound = useRef(room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1)
   const barrelAngle = useRef(0)
   // Compute initial payment position for hammer (before useMemo runs)
@@ -106,7 +108,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   const hammerOrbitAngle = useRef(initialPaymentPosition * 60) // Track cumulative rotation
   const hasSpunThisTurn = useRef(false)
   const recentlySpun = useRef(false) // Prevent double spin after respin
-  const spectatorSequenceRunning = useRef(false) // Prevent duplicate spectator sequences
+  const animatingRound = useRef<number | null>(null) // Track which round is animating - null when idle
   // If game is already PLAYING on mount, we likely reloaded mid-game - skip spin animation
   const mountedDuringGame = useRef(room.state === 'PLAYING')
   const triggerPullTime = useRef<number>(0) // Track when trigger was pulled for timing
@@ -131,25 +133,19 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     mySeat?.alive &&
     serverShooterIndex === mySeat.index
   )
-  const aliveCount = room.seats.filter(s => s.alive).length
-  const latestRound = room.rounds[room.rounds.length - 1]
+  // Use visual dead seats for display to prevent spoilers - server state updates before animation
+  const aliveCount = room.seats.filter(s => !visuallyDeadSeats.has(s.index)).length
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PAYMENT ORDER - Seat numbers reflect payment order (first payer = seat 1)
   // ═══════════════════════════════════════════════════════════════════════════
   // Sort seats by confirmedAt (payment time) - first payer is position 0
+  // This matches backend turn order logic exactly: confirmedAt ?? index
   const sortedSeats = useMemo(() => {
     return [...room.seats].sort((a, b) => {
-      // Both confirmed: sort by confirmedAt
-      if (a.confirmed && b.confirmed) {
-        return (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0)
-      }
-      // Only a confirmed: a comes first
-      if (a.confirmed) return -1
-      // Only b confirmed: b comes first
-      if (b.confirmed) return 1
-      // Neither confirmed: sort by join order (seat.index)
-      return a.index - b.index
+      const aTime = a.confirmedAt ?? a.index
+      const bTime = b.confirmedAt ?? b.index
+      return aTime - bTime
     })
   }, [room.seats])
 
@@ -172,6 +168,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   const clearTimeouts = useCallback(() => {
     timeouts.current.forEach(clearTimeout)
     timeouts.current = []
+    // Note: spinTimeout is intentionally NOT cleared here to prevent RESPINNING stuck bug
   }, [])
 
   const schedule = useCallback((fn: () => void, ms: number) => {
@@ -269,7 +266,15 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     }, mainDuration)
 
     if (onComplete) {
-      schedule(onComplete, duration)
+      // Use protected spinTimeout ref for completion callback - prevents RESPINNING stuck bug
+      // This timeout is NOT cleared by clearTimeouts() so respin always completes
+      if (spinTimeout.current) {
+        clearTimeout(spinTimeout.current)
+      }
+      spinTimeout.current = setTimeout(() => {
+        spinTimeout.current = null
+        onComplete()
+      }, duration)
     }
   }, [play, barrelControls, schedule])
 
@@ -342,7 +347,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   // ═══════════════════════════════════════════════════════════════════════════
   // REVEAL RESULT
   // ═══════════════════════════════════════════════════════════════════════════
-  const revealOutcome = useCallback((died: boolean, shooterSeat: number, isMyReveal: boolean) => {
+  const revealOutcome = useCallback((died: boolean, shooterSeat: number, isMyReveal: boolean, roundIndex: number) => {
     clearTimeouts()
     // DON'T stop cock yet - let it finish playing for full dramatic effect
 
@@ -375,6 +380,9 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       setRevealResult(died ? 'bang' : 'click')
       setPhase('reveal')
 
+      // Notify parent that this round is now visually revealed (for Game Log sync)
+      onRoundRevealed?.(roundIndex)
+
       // Hammer falls
       hammerControls.start({
         y: 0,
@@ -393,10 +401,12 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
           setRevealResult(null)
           setRevealChamberIndex(null)
           setChamberRevealed(false)
-          setPhase('idle')
           hasSpunThisTurn.current = false
           recentlySpun.current = false // Clear so next player spins fresh
+          // Clear animation lock BEFORE setting phase/activelyMyTurn - prevents race in idle sync
+          animatingRound.current = null
           setActivelyMyTurn(false)
+          setPhase('idle') // Set phase AFTER clearing locks
           // NOW mark seat as visually dead (after animation completes)
           setVisuallyDeadSeats(prev => new Set([...prev, shooterSeat]))
           // Visual sync happens via the idle sync effect now that activelyMyTurn=false
@@ -422,10 +432,12 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
           // Respin barrel (shorter spin)
           spinBarrel(TIMING.respinDuration, TIMING.respinRotations, () => {
             setChamberRevealed(false)
-            setPhase('idle')
             hasSpunThisTurn.current = false
-            setActivelyMyTurn(false)
             recentlySpun.current = true // Prevent next player from double-spinning
+            // Clear animation lock BEFORE setting phase/activelyMyTurn - prevents race in idle sync
+            animatingRound.current = null
+            setActivelyMyTurn(false)
+            setPhase('idle') // Set phase AFTER clearing locks
             // Visual sync happens via the idle sync effect now that activelyMyTurn=false
             play('reload')
           })
@@ -434,15 +446,16 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       }, TIMING.suspenseAfterCock)
     }, waitForCock)
 
-  }, [clearTimeouts, stop, play, hammerControls, schedule, spinBarrel, getChamberUnderHammer, onFinalDeathAnimationComplete])
+  }, [clearTimeouts, stop, play, hammerControls, schedule, spinBarrel, getChamberUnderHammer, onFinalDeathAnimationComplete, onRoundRevealed])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SPECTATOR SEQUENCE - Watch someone else's turn
   // ═══════════════════════════════════════════════════════════════════════════
-  const runSpectatorSequence = useCallback((died: boolean, shooterSeat: number) => {
+  const runSpectatorSequence = useCallback((died: boolean, shooterSeat: number, roundIndex: number) => {
     // Guard against duplicate calls (network retries, etc.)
-    if (spectatorSequenceRunning.current) return
-    spectatorSequenceRunning.current = true
+    // animatingRound tracks which round is being animated - cleared only when animation FULLY completes
+    if (animatingRound.current !== null) return
+    animatingRound.current = roundIndex
 
     clearTimeouts()
     stopAll()
@@ -468,44 +481,77 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       })
 
       // Phase 3: Reveal after cock + suspense
+      // NOTE: animatingRound is NOT cleared here - it's cleared when revealOutcome's animation fully completes
       schedule(() => {
-        spectatorSequenceRunning.current = false // Allow next sequence
-        revealOutcome(died, shooterSeat, false) // false = not my reveal (spectating)
+        revealOutcome(died, shooterSeat, false, roundIndex) // false = not my reveal (spectating)
       }, TIMING.cockDuration)
     })
   }, [clearTimeouts, stopAll, spinBarrel, play, hammerControls, schedule, revealOutcome, seatIndexToPaymentPosition])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // HANDLE SERVER ROUND RESULTS
+  // Process rounds sequentially - when multiple rounds arrive during animation,
+  // we process the NEXT pending round (not latest) to avoid skipping
+  // CRITICAL: Continue processing even after game SETTLED so all rounds animate
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
+    // Find the next unprocessed round (not just the latest - prevents skipping)
+    const nextRoundIndex = lastProcessedRound.current + 1
+    const nextRound = room.rounds.find(r => r.index === nextRoundIndex)
+    const hasUnprocessedRounds = !!nextRound
+
+    // Handle game state changes (SETTLED, ABORTED, etc.)
     if (room.state !== 'PLAYING') {
-      // Don't interrupt active reveal animations - let death scenes play out
-      // Even if game ended, spectators should see the final death reveal
-      if (phase === 'reveal' || phase === 'pulling' || spectatorSequenceRunning.current) {
-        // Animation in progress - let it complete naturally
+      // If animation in progress, let it complete naturally
+      if (phase === 'reveal' || phase === 'pulling' || animatingRound.current !== null) {
         return
       }
-      setPhase('idle')
-      clearTimeouts()
-      stopAll()
-      hasSpunThisTurn.current = false
-      return
-    }
 
-    if (latestRound && latestRound.index > lastProcessedRound.current) {
-      lastProcessedRound.current = latestRound.index
-      const wasMyTurn = latestRound.shooterSeatIndex === mySeat?.index
-
-      if (wasMyTurn && phase === 'pulling') {
-        // I pulled the trigger, reveal my result
-        revealOutcome(latestRound.died, latestRound.shooterSeatIndex, true) // true = my reveal
-      } else if (!wasMyTurn) {
-        // Spectator - run the full sequence
-        runSpectatorSequence(latestRound.died, latestRound.shooterSeatIndex)
+      // If there are unprocessed rounds, keep animating them even after game ended
+      // This ensures the death animation plays before showing victory screen
+      if (hasUnprocessedRounds && phase === 'idle') {
+        // Continue to round processing below
+      } else {
+        // All rounds processed or not idle - cleanup
+        if (phase !== 'idle') {
+          setPhase('idle')
+        }
+        clearTimeouts()
+        stopAll()
+        hasSpunThisTurn.current = false
+        return
       }
     }
-  }, [room.state, latestRound, mySeat?.index, phase, revealOutcome, runSpectatorSequence, clearTimeouts, stopAll])
+
+    if (nextRound) {
+      const wasMyTurn = nextRound.shooterSeatIndex === mySeat?.index
+
+      if (wasMyTurn) {
+        // My turn result arrived
+        if (phase === 'pulling') {
+          // I pulled the trigger, reveal my result - process immediately
+          lastProcessedRound.current = nextRound.index
+          revealOutcome(nextRound.died, nextRound.shooterSeatIndex, true, nextRound.index) // true = my reveal
+        } else if (phase === 'idle' || phase === 'ready') {
+          // Server auto-fired (timeout) or result arrived before/after pulling
+          // Treat it like a spectator reveal to avoid freezing - we missed our window
+          if (animatingRound.current !== null) return // Wait for current animation, don't mark as processed
+          lastProcessedRound.current = nextRound.index // Only mark AFTER guard passes
+          runSpectatorSequence(nextRound.died, nextRound.shooterSeatIndex, nextRound.index)
+        }
+        // If in spin/reveal/respin, wait for animation to complete
+      } else {
+        // Spectator - only process if we're idle and not already animating
+        // If animating, DON'T update lastProcessedRound - wait for animation to complete
+        // When phase changes to 'idle', this effect re-runs and processes the pending round
+        if (phase !== 'idle' || animatingRound.current !== null) {
+          return
+        }
+        lastProcessedRound.current = nextRound.index
+        runSpectatorSequence(nextRound.died, nextRound.shooterSeatIndex, nextRound.index)
+      }
+    }
+  }, [room.state, room.rounds, mySeat?.index, phase, revealOutcome, runSpectatorSequence, clearTimeouts, stopAll])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // TURN DETECTION - Start spin when it becomes my turn
@@ -516,6 +562,14 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     // Don't interrupt active phases
     if (['spin', 'pulling', 'reveal', 'respin'].includes(phase)) return
 
+    // Don't start my turn if a spectator animation is still running
+    if (animatingRound.current !== null) return
+
+    // Don't start my turn if there are pending rounds to process first
+    // (e.g., bots played quickly and we need to animate their rounds before mine)
+    const latestRoundIndex = room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1
+    if (lastProcessedRound.current < latestRoundIndex) return
+
     if (isMyTurn && phase === 'idle') {
       startMyTurnRef.current()
     } else if (!isMyTurn && phase === 'ready') {
@@ -523,7 +577,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       setPhase('idle')
       hasSpunThisTurn.current = false
     }
-  }, [room.state, isMyTurn, phase, serverShooterIndex])
+  }, [room.state, room.rounds, isMyTurn, phase, serverShooterIndex])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SYNC VISUAL SHOOTER ON IDLE - when not animating, keep visual in sync
@@ -533,13 +587,18 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     if (phase !== 'idle') return
     // Don't sync during locked animation sequences (wait for callbacks to complete)
     if (activelyMyTurn) return
+    // Don't sync if spectator animation is still finishing (prevents seat skipping)
+    if (animatingRound.current !== null) return
+    // Don't sync if there are pending rounds to process (prevents jumping ahead)
+    const latestRoundIndex = room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1
+    if (lastProcessedRound.current < latestRoundIndex) return
     // And when game is playing
     if (room.state !== 'PLAYING') return
     // Sync visual to server state
     setVisualShooterIndex(serverShooterIndex)
     // Also rotate hammer to shooter's payment position (instant snap when idle)
     rotateHammerToSeatRef.current(serverShooterPaymentPosition, 0.3)
-  }, [phase, activelyMyTurn, room.state, serverShooterIndex, serverShooterPaymentPosition])
+  }, [phase, activelyMyTurn, room.state, room.rounds, serverShooterIndex, serverShooterPaymentPosition])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COUNTDOWN (only during ready phase)
@@ -585,6 +644,10 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   useEffect(() => {
     return () => {
       clearTimeouts()
+      if (spinTimeout.current) {
+        clearTimeout(spinTimeout.current)
+        spinTimeout.current = null
+      }
       stopAll()
     }
   }, [clearTimeouts, stopAll])
@@ -679,19 +742,19 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
           MAIN CHAMBER AREA
           ══════════════════════════════════════════════════════════════════════ */}
 
-      <div className="relative pt-6 pb-4">
+      <div className="relative pt-2 md:pt-6 pb-2 md:pb-4">
 
-        {/* Stats Bar */}
-        <div className="flex justify-between items-center mb-6 px-2">
+        {/* Stats Bar - compact on mobile */}
+        <div className="flex justify-between items-center mb-3 md:mb-6 px-2">
           <div className="text-center">
-            <div className="text-[10px] font-mono text-ash/60 uppercase tracking-widest">Alive</div>
-            <div className={`text-3xl font-display transition-colors duration-200 ${isPulling ? 'text-blood-light' : 'text-alive-light'}`}>
+            <div className="text-[8px] md:text-[10px] font-mono text-ash/60 uppercase tracking-widest">Alive</div>
+            <div className={`text-2xl md:text-3xl font-display transition-colors duration-200 ${isPulling ? 'text-blood-light' : 'text-alive-light'}`}>
               {aliveCount}
             </div>
           </div>
           <div className="text-center">
-            <div className="text-[10px] font-mono text-ash/60 uppercase tracking-widest">Round</div>
-            <div className="text-3xl font-display text-gold">
+            <div className="text-[8px] md:text-[10px] font-mono text-ash/60 uppercase tracking-widest">Round</div>
+            <div className="text-2xl md:text-3xl font-display text-gold">
               {currentRound + 1}
             </div>
           </div>
@@ -907,7 +970,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
             STATUS / CONTROLS AREA
             ════════════════════════════════════════════════════════════════════ */}
 
-        <div className="mt-8 text-center min-h-[160px]">
+        <div className="mt-4 md:mt-8 text-center min-h-[120px] md:min-h-[160px]">
           <AnimatePresence mode="wait">
 
             {/* IDLE - Watching someone else */}
@@ -989,18 +1052,18 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className="space-y-5"
+                className="space-y-3 md:space-y-5"
               >
-                <div className="flex items-center justify-center gap-4">
+                <div className="flex items-center justify-center gap-3 md:gap-4">
                   <motion.h2
-                    className="text-gold font-display text-2xl tracking-[0.15em]"
+                    className="text-gold font-display text-xl md:text-2xl tracking-[0.15em]"
                     animate={{ opacity: [1, 0.5, 1] }}
                     transition={{ repeat: Infinity, duration: 1.2 }}
                   >
                     YOUR TURN
                   </motion.h2>
                   <motion.span
-                    className={`px-4 py-1.5 rounded-lg font-mono text-xl font-bold border-2 ${
+                    className={`px-3 md:px-4 py-1 md:py-1.5 rounded-lg font-mono text-lg md:text-xl font-bold border-2 ${
                       countdown <= 10
                         ? 'bg-blood/30 border-blood text-blood-light'
                         : 'bg-smoke/20 border-gold/40 text-gold'
@@ -1014,7 +1077,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
 
                 <button
                   onClick={handlePullTrigger}
-                  className="relative px-14 py-4 bg-gradient-to-b from-blood via-blood to-blood-dark border-2 border-blood-light/70 rounded-xl font-display text-xl tracking-[0.2em] text-chalk shadow-[0_0_30px_rgba(139,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.1)] hover:shadow-[0_0_50px_rgba(139,0,0,0.7)] hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                  className="relative px-10 md:px-14 py-3 md:py-4 bg-gradient-to-b from-blood via-blood to-blood-dark border-2 border-blood-light/70 rounded-xl font-display text-lg md:text-xl tracking-[0.2em] text-chalk shadow-[0_0_30px_rgba(139,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.1)] hover:shadow-[0_0_50px_rgba(139,0,0,0.7)] hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
                 >
                   PULL TRIGGER
                   <motion.div
@@ -1024,7 +1087,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                   />
                 </button>
 
-                <p className="text-blood-light/60 text-xs font-mono uppercase tracking-wider">
+                <p className="text-blood-light/60 text-[10px] md:text-xs font-mono uppercase tracking-wider">
                   1 in 6 chance
                 </p>
               </motion.div>
@@ -1152,7 +1215,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
               className="mt-4 p-4 bg-blood/10 border border-blood/25 rounded-xl"
             >
               <p className="text-blood-light/80 font-display tracking-wider">ELIMINATED</p>
-              <p className="text-ash/50 text-xs mt-1">watching the survivors...</p>
+              <p className="text-ash/50 text-xs mt-1">better luck next time</p>
             </motion.div>
           )}
         </div>

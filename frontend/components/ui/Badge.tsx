@@ -65,7 +65,7 @@ const roomStateVariants: Record<RoomState, BadgeVariant> = {
   FUNDING: 'warning',
   LOCKED: 'muted',
   PLAYING: 'success',
-  SETTLED: 'muted',
+  SETTLED: 'success',
   ABORTED: 'muted',
 }
 

@@ -53,9 +53,8 @@ describe('BotManager', () => {
 
     it('should create disabled bot manager by default', () => {
       botManager = new BotManager('testnet-10')
-      // Verify by starting - should log "disabled"
-      botManager.start()
-      expect(logger.info).toHaveBeenCalledWith('Bot manager disabled')
+      // Default constructor creates disabled manager
+      expect(botManager.enabled).toBe(false)
     })
 
     it('should create enabled bot manager when specified', () => {
@@ -66,10 +65,12 @@ describe('BotManager', () => {
   })
 
   describe('start', () => {
-    it('should log disabled message when disabled', () => {
+    it('should enable and start the bot manager', () => {
       botManager = new BotManager('testnet-10', false)
+      expect(botManager.enabled).toBe(false)
       botManager.start()
-      expect(logger.info).toHaveBeenCalledWith('Bot manager disabled')
+      expect(botManager.enabled).toBe(true)
+      expect(logger.info).toHaveBeenCalledWith('Bot manager started', { network: 'testnet-10', botCount: 0 })
     })
 
     it('should log started message when enabled', () => {

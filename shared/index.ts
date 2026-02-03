@@ -62,6 +62,7 @@ export interface Room {
   depositAddress: string // Single address for all deposits
   lockHeight: number | null // Kaspa block height when locked
   settlementBlockHeight: number | null
+  settlementBlockHash: string | null // Block hash at settlementBlockHeight (for RNG verification)
   serverCommit: string // SHA256(server_seed)
   serverSeed: string | null // Revealed after game
   houseCutPercent: number
