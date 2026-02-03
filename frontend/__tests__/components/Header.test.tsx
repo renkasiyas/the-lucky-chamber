@@ -14,6 +14,7 @@ import * as ToastModule from '../../components/ui/Toast'
 const mockPush = vi.fn()
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
+  usePathname: () => '/lobby',
 }))
 
 // Mock hooks
@@ -42,12 +43,17 @@ describe('Header', () => {
     address: null,
     connected: false,
     connecting: false,
+    initializing: false,
     connect: mockConnect,
     disconnect: mockDisconnect,
     balance: null,
     refreshBalance: mockRefreshBalance,
+    signMessage: vi.fn(),
+    sendKaspa: vi.fn(),
     error: null,
     network: null,
+    showWalletModal: false,
+    closeWalletModal: vi.fn(),
   }
 
   const defaultWebSocketMock = {
@@ -236,8 +242,9 @@ describe('Header', () => {
     it('shows balance', () => {
       render(<Header />)
 
-      expect(screen.getByText('5.00')).toBeInTheDocument()
-      expect(screen.getByText('KAS')).toBeInTheDocument()
+      // Balance is shown in both mobile and desktop views
+      expect(screen.getAllByText('5.00').length).toBeGreaterThan(0)
+      expect(screen.getAllByText('KAS').length).toBeGreaterThan(0)
     })
 
     it('shows online indicator dot when connected', () => {
@@ -322,7 +329,8 @@ describe('Header', () => {
 
       render(<Header />)
 
-      expect(screen.getByText('5.00')).toBeInTheDocument()
+      // Balance is shown in both mobile and desktop views
+      expect(screen.getAllByText('5.00').length).toBeGreaterThan(0)
     })
 
     it('does not show balance section when balance is null', () => {

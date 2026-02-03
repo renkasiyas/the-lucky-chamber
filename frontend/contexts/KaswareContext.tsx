@@ -19,6 +19,8 @@ interface KaswareContextValue {
   signMessage: (message: string) => Promise<string>
   sendKaspa: (toAddress: string, amount: number) => Promise<string>
   error: string | null
+  showWalletModal: boolean
+  closeWalletModal: () => void
 }
 
 const KaswareContext = createContext<KaswareContextValue | null>(null)
@@ -31,6 +33,11 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
   const [network, setNetwork] = useState<string | null>(null)
   const [balance, setBalance] = useState<{ total: string; confirmed: string; unconfirmed: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showWalletModal, setShowWalletModal] = useState(false)
+
+  const closeWalletModal = useCallback(() => {
+    setShowWalletModal(false)
+  }, [])
 
   const getKasware = useCallback((): KaswareWallet | null => {
     if (typeof window === 'undefined') return null
@@ -48,12 +55,13 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    // If still no wallet, check if mobile and show modal, otherwise show error
     if (!kasware) {
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+      const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
       if (isMobile) {
-        setError('Mobile browsers not supported. Please use a desktop browser with Kasware or Kasanova extension.')
+        setShowWalletModal(true)
       } else {
-        setError('No compatible wallet found. Install Kasware or Kasanova browser extension.')
+        setError('No compatible wallet found. Install Kasware browser extension.')
       }
       return
     }
@@ -258,6 +266,8 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         signMessage,
         sendKaspa,
         error,
+        showWalletModal,
+        closeWalletModal,
       }}
     >
       {children}

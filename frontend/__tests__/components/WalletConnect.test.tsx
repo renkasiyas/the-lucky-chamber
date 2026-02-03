@@ -15,15 +15,23 @@ describe('WalletConnect', () => {
   const mockConnect = vi.fn()
   const mockDisconnect = vi.fn()
 
+  const mockCloseWalletModal = vi.fn()
+
   const defaultMockReturn = {
     address: null,
     connected: false,
     connecting: false,
+    initializing: false,
     connect: mockConnect,
     disconnect: mockDisconnect,
+    refreshBalance: vi.fn(),
+    signMessage: vi.fn(),
+    sendKaspa: vi.fn(),
     error: null,
     network: null,
     balance: null,
+    showWalletModal: false,
+    closeWalletModal: mockCloseWalletModal,
   }
 
   beforeEach(() => {
@@ -115,17 +123,18 @@ describe('WalletConnect', () => {
       expect(kasanovaLink).toHaveAttribute('href', 'https://kasanova.io')
     })
 
-    it('shows mobile-specific message on mobile', () => {
-      Object.defineProperty(navigator, 'userAgent', {
-        value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)',
-        writable: true,
-        configurable: true,
+    it('shows wallet selection modal when showWalletModal is true', () => {
+      vi.spyOn(useKaswareModule, 'useKasware').mockReturnValue({
+        ...defaultMockReturn,
+        showWalletModal: true,
       })
 
       render(<WalletConnect />)
 
-      expect(screen.getByText(/On mobile\?/)).toBeInTheDocument()
-      expect(screen.getByText(/Kasware app/)).toBeInTheDocument()
+      // Modal shows these unique elements (Desktop only and Open in app are modal-specific)
+      expect(screen.getByText('Desktop only')).toBeInTheDocument()
+      expect(screen.getByText('Open in app')).toBeInTheDocument()
+      expect(screen.getByText('Cancel')).toBeInTheDocument()
     })
   })
 

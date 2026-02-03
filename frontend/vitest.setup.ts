@@ -5,6 +5,16 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
 import { afterEach, vi } from 'vitest'
 
+// Mock Next.js Image component
+vi.mock('next/image', async () => {
+  const React = await import('react')
+  return {
+    default: (props: Record<string, unknown>) => {
+      return React.createElement('img', props)
+    },
+  }
+})
+
 // Cleanup after each test
 afterEach(() => {
   cleanup()

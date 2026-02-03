@@ -52,20 +52,25 @@ export function SoundProvider({ children }: { children: ReactNode }) {
     if (unlockAttempted.current) return
     unlockAttempted.current = true
 
-    // Play and immediately pause a silent sound on each audio element
-    // This unlocks the audio context on mobile browsers
-    audioRefs.current.forEach((audio) => {
-      const originalVolume = audio.volume
-      audio.volume = 0
-      audio.play().then(() => {
-        audio.pause()
-        audio.currentTime = 0
-        audio.volume = originalVolume
-      }).catch(() => {
-        // Ignore errors - some browsers may still block
-        audio.volume = originalVolume
+    // Create a short silent audio buffer to unlock the audio context
+    // This avoids playing all game sounds at once
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext
+      if (AudioContext) {
+        const ctx = new AudioContext()
+        const buffer = ctx.createBuffer(1, 1, 22050)
+        const source = ctx.createBufferSource()
+        source.buffer = buffer
+        source.connect(ctx.destination)
+        source.start(0)
+        source.stop(0.001)
+      }
+    } catch {
+      // Fallback: touch audio elements without actually playing them
+      audioRefs.current.forEach((audio) => {
+        audio.load()
       })
-    })
+    }
 
     setUnlocked(true)
   }, [])

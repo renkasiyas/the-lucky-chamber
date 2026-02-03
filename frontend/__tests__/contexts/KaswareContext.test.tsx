@@ -12,6 +12,8 @@ const createMockWallet = (): KaswareWallet => ({
   requestAccounts: vi.fn(async () => ['kaspatest:qq1234567890']),
   getAccounts: vi.fn(async () => []),
   getNetwork: vi.fn(async () => 'testnet-10'),
+  switchNetwork: vi.fn(async () => {}),
+  getPublicKey: vi.fn(async () => 'mock-public-key'),
   getBalance: vi.fn(async () => ({
     total: '100000000',
     confirmed: '100000000',

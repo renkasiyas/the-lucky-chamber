@@ -564,17 +564,6 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           <StepHeader currentStep={currentStep} />
         </div>
 
-        {/* Back Button - compact on mobile, larger on desktop */}
-        <button
-          onClick={() => { play('click'); router.push('/lobby') }}
-          className={`animate-fade-in inline-flex items-center gap-1.5 md:gap-2 min-h-[44px] min-w-[44px] px-2 md:px-4 py-1 md:py-2 text-ash hover:text-chalk hover:bg-steel/50 rounded-lg transition-all duration-200 touch-manipulation ${room.state === 'PLAYING' ? 'absolute top-0 left-0 z-20' : ''}`}
-        >
-          <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-          <span className="text-xs md:text-sm font-medium">Lobby</span>
-        </button>
-
         {/* Room Info Card */}
         <Card variant="elevated" className="animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
           <CardHeader>

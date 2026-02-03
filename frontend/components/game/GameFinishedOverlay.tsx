@@ -520,18 +520,20 @@ export function GameFinishedOverlay({
                 </div>
 
                 {/* Actions - mobile-friendly touch targets */}
-                <div className="p-4 border-t border-edge/30 space-y-3">
+                <div className="p-4 border-t border-edge/30 space-y-3 relative z-20">
                   <div className="flex gap-3">
                     <button
+                      type="button"
                       onClick={() => { playSound('click'); onDismiss() }}
-                      className="flex-1 py-4 px-4 min-h-[48px] bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge active:bg-smoke/70 transition-all touch-manipulation"
+                      className="flex-1 py-4 px-4 min-h-[48px] bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge active:bg-smoke/70 transition-all touch-manipulation select-none cursor-pointer"
                     >
                       DETAILS
                     </button>
                     <button
+                      type="button"
                       onClick={() => { playSound('click'); onPlayAgain() }}
                       className={`
-                        flex-1 py-4 px-4 min-h-[48px] rounded-xl font-display text-sm tracking-wider text-void transition-all touch-manipulation
+                        flex-1 py-4 px-4 min-h-[48px] rounded-xl font-display text-sm tracking-wider text-void transition-all touch-manipulation select-none cursor-pointer
                         ${iAmSurvivor
                           ? 'bg-gradient-to-r from-alive to-alive-light hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] active:opacity-80'
                           : 'bg-gradient-to-r from-gold to-gold-dark hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] active:opacity-80'
@@ -542,8 +544,9 @@ export function GameFinishedOverlay({
                     </button>
                   </div>
                   <button
+                    type="button"
                     onClick={() => { playSound('click'); setShowVerifier(true) }}
-                    className="w-full py-3 px-4 min-h-[48px] bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold hover:text-gold-light hover:border-gold/50 hover:bg-gold/20 active:bg-gold/30 transition-all flex items-center justify-center gap-2 touch-manipulation"
+                    className="w-full py-3 px-4 min-h-[48px] bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold hover:text-gold-light hover:border-gold/50 hover:bg-gold/20 active:bg-gold/30 transition-all flex items-center justify-center gap-2 touch-manipulation select-none cursor-pointer"
                   >
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
@@ -560,18 +563,16 @@ export function GameFinishedOverlay({
       {/* Close button - fixed position so it's always accessible, hidden when verifier modal open */}
       {/* Always show close button (with different opacity based on phase) to ensure users can always exit */}
       {!showVerifier && (
-        <motion.button
-          initial={{ opacity: 0 }}
-          animate={{ opacity: phase === 'results' ? 1 : 0.5 }}
-          transition={{ delay: phase === 'results' ? 0.8 : 0 }}
+        <button
+          type="button"
           onClick={onDismiss}
-          className="fixed top-4 right-4 z-[60] p-3 min-w-[44px] min-h-[44px] text-ash/50 hover:text-chalk hover:bg-white/5 active:bg-white/10 rounded-full transition-all touch-manipulation"
+          className={`fixed top-4 right-4 z-[60] p-3 min-w-[44px] min-h-[44px] text-ash/50 hover:text-chalk hover:bg-white/5 active:bg-white/10 rounded-full transition-all touch-manipulation select-none cursor-pointer ${phase === 'results' ? 'opacity-100' : 'opacity-50'}`}
           aria-label="Close"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
           </svg>
-        </motion.button>
+        </button>
       )}
 
       {/* Provably Fair Verifier Modal */}

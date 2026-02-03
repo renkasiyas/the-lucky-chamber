@@ -3,19 +3,24 @@
 
 'use client'
 
-import { useEffect, useState } from 'react'
 import { useKasware } from '../hooks/useKasware'
 import { Button } from './ui/Button'
 import { formatAddress, formatBalance } from '../lib/format'
+import { WalletSelectionModal } from './WalletSelectionModal'
 
 export function WalletConnect() {
-  const { address, connected, connecting, connect, disconnect, error, network, balance } =
-    useKasware()
-  const [isMobile, setIsMobile] = useState(false)
-
-  useEffect(() => {
-    setIsMobile(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent))
-  }, [])
+  const {
+    address,
+    connected,
+    connecting,
+    connect,
+    disconnect,
+    error,
+    network,
+    balance,
+    showWalletModal,
+    closeWalletModal,
+  } = useKasware()
 
   if (connected && address) {
     return (
@@ -127,49 +132,28 @@ export function WalletConnect() {
         </div>
       )}
 
-      {isMobile ? (
-        <p className="text-xs text-ember text-center mt-4">
-          Mobile not supported. Use desktop with{' '}
-          <a
-            href="https://kasware.xyz"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gold hover:text-gold-light underline underline-offset-2"
-          >
-            Kasware
-          </a>
-          {' '}or{' '}
-          <a
-            href="https://kasanova.io"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gold hover:text-gold-light underline underline-offset-2"
-          >
-            Kasanova
-          </a>
-        </p>
-      ) : (
-        <p className="text-xs text-ember text-center mt-4">
-          Compatible wallets:{' '}
-          <a
-            href="https://kasware.xyz"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gold hover:text-gold-light underline underline-offset-2"
-          >
-            Kasware
-          </a>
-          {' '}&{' '}
-          <a
-            href="https://kasanova.io"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gold hover:text-gold-light underline underline-offset-2"
-          >
-            Kasanova
-          </a>
-        </p>
-      )}
+      <p className="text-xs text-ember text-center mt-4">
+        Compatible wallets:{' '}
+        <a
+          href="https://kasware.xyz"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-gold hover:text-gold-light underline underline-offset-2"
+        >
+          Kasware
+        </a>
+        {' '}&{' '}
+        <a
+          href="https://kasanova.io"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-gold hover:text-gold-light underline underline-offset-2"
+        >
+          Kasanova
+        </a>
+      </p>
+
+      <WalletSelectionModal isOpen={showWalletModal} onClose={closeWalletModal} />
     </div>
   )
 }
