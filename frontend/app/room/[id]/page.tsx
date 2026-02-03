@@ -359,6 +359,21 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     prevRoomStateRef.current = room.state
   }, [room?.state])
 
+  // Fallback timeout: if animation callback never fires (unmount, timing issue, etc.),
+  // auto-show results after 10 seconds to prevent UI getting stuck at step 4
+  useEffect(() => {
+    if (!pendingVictoryRef.current || showGameFinished) return
+
+    const fallbackTimeout = setTimeout(() => {
+      if (pendingVictoryRef.current && !showGameFinished) {
+        setShowGameFinished(true)
+        pendingVictoryRef.current = false
+      }
+    }, 10000) // 10 second safety net
+
+    return () => clearTimeout(fallbackTimeout)
+  }, [room?.state, showGameFinished])
+
   // Initialize visuallyDeadSeats on mount/room load (for page refresh with existing deaths)
   useEffect(() => {
     if (!room) return
@@ -410,6 +425,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         lockStartTimeRef.current = Date.now()
         // ~5 blocks at ~1 sec/block = ~5 seconds
         setLockCountdown(5)
+        // Play reload sound when entering LOCKED (loading the chamber for RNG)
+        play('reload')
       }
 
       const interval = setInterval(() => {
@@ -456,12 +473,17 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
   const mySeat = room.seats.find((s) => s.walletAddress === address)
   const isInRoom = !!mySeat
-  // Don't advance to step 5 (RESULT) until death animation completes
-  // This prevents the StepHeader from spoiling the outcome before the reveal
-  // Exception: on page refresh during SETTLED state, show step 5 immediately (we missed the live animation)
-  const rawStep = getStepFromState(room.state, isInRoom, mySeat?.confirmed || false)
+
+  // Unified UI state: prevents all UI elements from revealing game end before animation completes
+  // On page refresh during SETTLED, we show SETTLED immediately (missed the live animation)
+  // During live gameplay, we wait for showGameFinished before transitioning UI to SETTLED
   const isRefreshDuringSETTLED = prevRoomStateRef.current === null && room.state === 'SETTLED'
-  const currentStep = (rawStep === 5 && !showGameFinished && !isRefreshDuringSETTLED) ? 4 : rawStep
+  const isUiSettled = room.state === 'SETTLED' && (showGameFinished || isRefreshDuringSETTLED)
+  const uiRoomState = room.state === 'SETTLED' && !isUiSettled ? 'PLAYING' : room.state
+
+  // Don't advance to step 5 (RESULT) until death animation completes
+  const rawStep = getStepFromState(room.state, isInRoom, mySeat?.confirmed || false)
+  const currentStep = (rawStep === 5 && !isUiSettled) ? 4 : rawStep
   const confirmedCount = room.seats.filter(s => s.confirmed).length
   const survivors = room.seats.filter(s => s.alive)
   const { pot, houseCut, payoutPool, perSurvivor } = calculatePayouts(
@@ -475,10 +497,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     <div className="min-h-screen bg-void pt-14 md:pt-20 pb-4 md:pb-8">
       {/* Background effects */}
       <div className="fixed inset-0 bg-gradient-to-b from-void via-noir to-void pointer-events-none" />
-      {room.state === 'PLAYING' && (
+      {uiRoomState === 'PLAYING' && (
         <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-blood/10 rounded-full blur-[150px] pointer-events-none animate-pulse" />
       )}
-      {room.state !== 'PLAYING' && (
+      {uiRoomState !== 'PLAYING' && (
         <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-gold/5 rounded-full blur-[150px] pointer-events-none" />
       )}
 
@@ -495,7 +517,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
       <div className="relative z-10 max-w-4xl mx-auto px-3 md:px-4 space-y-3 md:space-y-6">
         {/* Step Progress - hidden on mobile during gameplay to save space */}
-        <div className={`animate-fade-in ${room.state === 'PLAYING' ? 'hidden md:block' : ''}`}>
+        <div className={`animate-fade-in ${uiRoomState === 'PLAYING' ? 'hidden md:block' : ''}`}>
           <StepHeader currentStep={currentStep} />
         </div>
 
@@ -518,7 +540,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                 <CardTitle className={room.mode === 'EXTREME' ? 'text-blood-light' : 'text-gold'}>
                   {room.mode}
                 </CardTitle>
-                <RoomStateBadge state={room.state} />
+                <RoomStateBadge state={uiRoomState} />
               </div>
               <ProvablyFairButton room={room} explorerBaseUrl={explorerUrl} />
             </div>

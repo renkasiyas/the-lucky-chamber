@@ -301,6 +301,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       rotateHammerToSeatRef.current(serverShooterPaymentPosition, 0)
       setPhase('ready')
       setCountdown(30)
+      play('cock') // Announce: pull trigger is now available
       return
     }
 
@@ -313,8 +314,9 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     spinBarrel(TIMING.spinDuration, TIMING.spinRotations, () => {
       setPhase('ready')
       setCountdown(30)
+      play('cock') // Announce: pull trigger is now available
     })
-  }, [clearTimeouts, stopAll, spinBarrel, serverShooterPaymentPosition])
+  }, [clearTimeouts, stopAll, spinBarrel, play, serverShooterPaymentPosition])
 
   // Keep ref in sync for stable reference in useEffects
   startMyTurnRef.current = startMyTurn
@@ -327,9 +329,8 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
 
     setPhase('pulling')
     triggerPullTime.current = Date.now() // Track for timing reveal
-    play('cock')
 
-    // Hammer pulls back
+    // Hammer pulls back (cock sound already played when ready phase started)
     hammerControls.start({
       y: -16,
       transition: {
@@ -342,7 +343,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     onPullTrigger?.()
 
     // Server will send result, handled in useEffect below
-  }, [phase, play, hammerControls, onPullTrigger])
+  }, [phase, hammerControls, onPullTrigger])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // REVEAL RESULT
@@ -363,14 +364,12 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       waitForCock = Math.max(0, AUDIO.cock - TIMING.cockDuration)
     }
 
-    // After cock finishes, start heartbeat suspense
+    // After cock finishes, suspense pause then reveal
     schedule(() => {
       stop('cock')
-      play('heartbeat', { loop: true, volume: 0.8 })
 
-      // After suspense, reveal
+      // Suspense pause, then reveal
       schedule(() => {
-        stop('heartbeat')
 
       // Compute which chamber is visually under the hammer RIGHT NOW
       const chamber = getChamberUnderHammer()
@@ -414,7 +413,6 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
           if (isMyReveal) {
             setShowDeathVignette(true)
           }
-          play('reload')
           // Signal that death animation is complete - page can now show victory if game ended
           onFinalDeathAnimationComplete?.()
         }, TIMING.revealDisplay + AUDIO.eliminated)
@@ -439,7 +437,6 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
             setActivelyMyTurn(false)
             setPhase('idle') // Set phase AFTER clearing locks
             // Visual sync happens via the idle sync effect now that activelyMyTurn=false
-            play('reload')
           })
         }, TIMING.revealDisplay)
       }
@@ -450,6 +447,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SPECTATOR SEQUENCE - Watch someone else's turn
+  // Flow: spin → cock → pulling → suspense → reveal
   // ═══════════════════════════════════════════════════════════════════════════
   const runSpectatorSequence = useCallback((died: boolean, shooterSeat: number, roundIndex: number) => {
     // Guard against duplicate calls (network retries, etc.)
@@ -462,18 +460,20 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
     setChamberRevealed(false)
     setRevealResult(null)
     hasSpunThisTurn.current = false
+
     // Lock visual shooter to THIS round's shooter for the animation
     setVisualShooterIndex(shooterSeat)
+
     // Rotate hammer to shooter's payment position
     const shooterPaymentPosition = seatIndexToPaymentPosition.get(shooterSeat) ?? 0
     rotateHammerToSeatRef.current(shooterPaymentPosition)
 
-    // Phase 1: Spin
+    // Phase 1: Spin barrel (turn is starting)
     setPhase('spin')
     spinBarrel(TIMING.spinDuration, TIMING.spinRotations, () => {
-      // Phase 2: Show "pulling" state briefly
-      setPhase('pulling')
+      // Phase 2: Cock sound announces pull is ready, then pulling animation
       play('cock')
+      setPhase('pulling')
 
       hammerControls.start({
         y: -16,
@@ -622,14 +622,15 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
 
   // ═══════════════════════════════════════════════════════════════════════════
   // INITIALIZE/SYNC DEATH STATE (for page refresh when already dead)
-  // Only syncs if NOT in an active turn (prevents early spoiler)
+  // Only syncs if NOT in an active turn AND no animation in progress
   // ═══════════════════════════════════════════════════════════════════════════
   useEffect(() => {
-    // Don't spoil during active turn sequence
+    // Don't spoil during active turn sequence or spectator animation
     if (activelyMyTurn) return
+    if (animatingRound.current !== null) return
     if (phase !== 'idle') return
 
-    // Sync visuallyDeadSeats with room state when idle
+    // Sync visuallyDeadSeats with room state when truly idle
     const deadFromRoom = new Set(room.seats.filter(s => !s.alive).map(s => s.index))
     setVisuallyDeadSeats(deadFromRoom)
 
