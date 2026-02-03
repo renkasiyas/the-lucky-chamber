@@ -49,7 +49,12 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
     }
 
     if (!kasware) {
-      setError('No compatible wallet found. Install Kasware or Kasanova.')
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+      if (isMobile) {
+        setError('Mobile browsers not supported. Please use a desktop browser with Kasware or Kasanova extension.')
+      } else {
+        setError('No compatible wallet found. Install Kasware or Kasanova browser extension.')
+      }
       return
     }
 
