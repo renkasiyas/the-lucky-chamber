@@ -12,6 +12,7 @@ import {
   type GameStartPayload,
   type RoundResultPayload,
   type GameEndPayload,
+  type PayoutSentPayload,
   type RNGRevealPayload,
   SOMPI_PER_KAS,
 } from '../../../shared/index.js'
@@ -42,12 +43,21 @@ interface PendingGameState {
   resolveWait?: () => void
 }
 
+// Pending payout state - waits for frontend to confirm results are shown
+interface PendingPayoutState {
+  roomId: string
+  confirmedClients: Set<string> // Wallet addresses that confirmed
+  resolveWait?: () => void
+  timeoutHandle?: NodeJS.Timeout
+}
+
 export class RoomManager {
   private wsServer: WSServer | null = null
   private serverSeeds: Map<string, string> = new Map() // roomId -> server seed
   private onRoomCompleted: RoomCompletedCallback | null = null
   private onTurnStart: TurnStartCallback | null = null
   private pendingGames: Map<string, PendingGameState> = new Map() // roomId -> pending state
+  private pendingPayouts: Map<string, PendingPayoutState> = new Map() // roomId -> pending payout state
 
   /**
    * Set callback for when a room is completed (settled or aborted)
@@ -61,6 +71,29 @@ export class RoomManager {
    */
   setTurnStartCallback(callback: TurnStartCallback): void {
     this.onTurnStart = callback
+  }
+
+  /**
+   * Handle client confirming they've shown the results modal
+   * When enough clients confirm (or timeout), payout is sent
+   */
+  confirmResultsShown(roomId: string, walletAddress: string): void {
+    const pending = this.pendingPayouts.get(roomId)
+    if (!pending) {
+      logger.debug('No pending payout for room, ignoring confirmation', { roomId, walletAddress })
+      return
+    }
+
+    pending.confirmedClients.add(walletAddress)
+    logRoomEvent('Client confirmed results shown', roomId, {
+      walletAddress,
+      confirmedCount: pending.confirmedClients.size
+    })
+
+    // Trigger the waiting payout to proceed
+    if (pending.resolveWait) {
+      pending.resolveWait()
+    }
   }
 
   /**
@@ -799,6 +832,7 @@ export class RoomManager {
   /**
    * Settle game and calculate payouts
    * All monetary calculations done in sompi (integers) to avoid floating point errors
+   * Payout is delayed until at least one frontend confirms they showed the results modal
    */
   private async settleGame(roomId: string, blockHash: string): Promise<void> {
     const room = store.getRoom(roomId)
@@ -841,35 +875,20 @@ export class RoomManager {
       })
     })
 
-    // Send actual payout transaction
-    let payoutTxId = 'payout_failed'
-    try {
-      const { payoutService } = await import('../crypto/services/payout-service.js')
-      payoutTxId = await payoutService.sendPayout(roomId)
-      logRoomEvent('Payout transaction sent', roomId, { txId: payoutTxId })
-    } catch (error: any) {
-      logger.error('Failed to send payout transaction', {
-        roomId,
-        error: error?.message || String(error),
-        stack: error?.stack
-      })
-    }
-
+    // Mark room as settled before sending GAME_END (payoutTxId pending)
     room.state = RoomState.SETTLED
-    room.payoutTxId = payoutTxId
+    room.payoutTxId = 'pending'
     room.currentTurnSeatIndex = null // Game over, no more turns
     store.updateRoom(roomId, room)
 
-    logRoomEvent('Game settled', roomId, { survivorCount: survivors.length, payoutTxId })
-
-    // Broadcast GAME_END event
+    // Broadcast GAME_END event with pending payout - frontend will show results
     const payouts = store.getPayouts(roomId)
     if (this.wsServer) {
       const payload: GameEndPayload = {
         roomId,
         survivors: survivors.map((s) => s.index),
         payouts,
-        payoutTxId: room.payoutTxId!,
+        payoutTxId: 'pending',
       }
       this.wsServer.broadcastToRoom(roomId, WSEvent.GAME_END, payload)
     }
@@ -895,6 +914,70 @@ export class RoomManager {
       }
       this.wsServer.broadcastToRoom(roomId, WSEvent.RNG_REVEAL, payload)
     }
+
+    // Wait for frontend to confirm results are shown before sending payout
+    // This prevents the wallet notification from spoiling the result
+    const PAYOUT_WAIT_TIMEOUT = 10000 // 10 seconds max wait
+    const pendingPayout: PendingPayoutState = {
+      roomId,
+      confirmedClients: new Set(),
+    }
+    this.pendingPayouts.set(roomId, pendingPayout)
+
+    logRoomEvent('Waiting for frontend to confirm results shown', roomId)
+
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          pendingPayout.resolveWait = resolve
+        }),
+        new Promise<void>((resolve) => {
+          pendingPayout.timeoutHandle = setTimeout(() => {
+            logRoomEvent('Payout wait timeout - proceeding anyway', roomId)
+            resolve()
+          }, PAYOUT_WAIT_TIMEOUT)
+        }),
+      ])
+    } finally {
+      // Clean up timeout
+      if (pendingPayout.timeoutHandle) {
+        clearTimeout(pendingPayout.timeoutHandle)
+      }
+      this.pendingPayouts.delete(roomId)
+    }
+
+    logRoomEvent('Frontend confirmed or timeout - sending payout', roomId, {
+      confirmedClients: Array.from(pendingPayout.confirmedClients)
+    })
+
+    // Now send actual payout transaction
+    let payoutTxId = 'payout_failed'
+    try {
+      const { payoutService } = await import('../crypto/services/payout-service.js')
+      payoutTxId = await payoutService.sendPayout(roomId)
+      logRoomEvent('Payout transaction sent', roomId, { txId: payoutTxId })
+    } catch (error: any) {
+      logger.error('Failed to send payout transaction', {
+        roomId,
+        error: error?.message || String(error),
+        stack: error?.stack
+      })
+    }
+
+    // Update room with actual payout txId
+    room.payoutTxId = payoutTxId
+    store.updateRoom(roomId, room)
+
+    // Broadcast PAYOUT_SENT so frontend knows transaction is now live
+    if (this.wsServer) {
+      const sentPayload: PayoutSentPayload = {
+        roomId,
+        payoutTxId,
+      }
+      this.wsServer.broadcastToRoom(roomId, WSEvent.PAYOUT_SENT, sentPayload)
+    }
+
+    logRoomEvent('Game settled', roomId, { survivorCount: survivors.length, payoutTxId })
 
     // Notify callback that room is completed
     if (this.onRoomCompleted) {

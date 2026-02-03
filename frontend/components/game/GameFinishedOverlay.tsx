@@ -16,6 +16,7 @@ interface GameFinishedOverlayProps {
   explorerUrl: string
   onDismiss: () => void
   onPlayAgain: () => void
+  onResultsShown?: () => void // Called when results are displayed - signals backend to send payout
 }
 
 export function GameFinishedOverlay({
@@ -24,6 +25,7 @@ export function GameFinishedOverlay({
   explorerUrl,
   onDismiss,
   onPlayAgain,
+  onResultsShown,
 }: GameFinishedOverlayProps) {
   // Skip suspense phase - we already had the dramatic BANG! reveal in ChamberGame
   // Go straight to reveal to avoid "The chamber falls silent" after we just saw an explosion
@@ -58,6 +60,10 @@ export function GameFinishedOverlay({
   [])
 
   useEffect(() => {
+    // Signal backend that results are being shown - this triggers the payout transaction
+    // Called immediately on mount so the payout doesn't arrive before the modal
+    onResultsShown?.()
+
     // We start at 'reveal' phase - the drama already happened in ChamberGame
     // Just play win sound if survivor and transition to results
     if (iAmSurvivor) {
@@ -70,20 +76,21 @@ export function GameFinishedOverlay({
     return () => {
       clearTimeout(t1)
     }
-  }, [iAmSurvivor, playSound])
+  }, [iAmSurvivor, playSound, onResultsShown])
 
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden"
+      className="fixed inset-0 z-50 flex flex-col overflow-y-auto overflow-x-hidden overscroll-contain"
+      style={{ WebkitOverflowScrolling: 'touch' }}
     >
-      {/* Cinematic backdrop */}
-      <div className="absolute inset-0 bg-void" />
+      {/* Cinematic backdrop - fixed so it doesn't scroll */}
+      <div className="fixed inset-0 bg-void pointer-events-none" />
 
-      {/* Dramatic radial gradient */}
+      {/* Dramatic radial gradient - fixed so it doesn't scroll */}
       <motion.div
-        className="absolute inset-0"
+        className="fixed inset-0 pointer-events-none"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 1 }}
@@ -94,9 +101,9 @@ export function GameFinishedOverlay({
         }}
       />
 
-      {/* Animated light rays for winners */}
+      {/* Animated light rays for winners - fixed so it doesn't scroll */}
       {iAmSurvivor && phase === 'results' && (
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="fixed inset-0 overflow-hidden pointer-events-none">
           {[...Array(8)].map((_, i) => (
             <motion.div
               key={i}
@@ -114,9 +121,9 @@ export function GameFinishedOverlay({
         </div>
       )}
 
-      {/* Confetti */}
+      {/* Confetti - fixed so it doesn't scroll */}
       {iAmSurvivor && phase === 'results' && (
-        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="fixed inset-0 pointer-events-none overflow-hidden">
           {confettiPieces.map((piece) => (
             <motion.div
               key={piece.id}
@@ -145,8 +152,8 @@ export function GameFinishedOverlay({
         </div>
       )}
 
-      {/* Content */}
-      <div className="relative z-10 w-full max-w-lg mx-4">
+      {/* Content - scrollable container with safe padding for mobile */}
+      <div className="relative z-10 w-full max-w-lg mx-auto px-4 py-12 sm:py-16 flex-1 flex flex-col justify-center min-h-[100dvh]">
         <AnimatePresence mode="wait">
           {/* Phase 0: Suspense - dramatic buildup */}
           {phase === 'suspense' && (
@@ -494,7 +501,7 @@ export function GameFinishedOverlay({
                     >
                       <span className="text-[9px] font-mono text-ember/60 uppercase tracking-wider block mb-1">Transaction</span>
                       <a
-                        href={`${explorerUrl}/txs/${room.payoutTxId}`}
+                        href={`${explorerUrl}/transactions/${room.payoutTxId}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-xs font-mono text-gold/80 hover:text-gold transition-colors"
@@ -505,22 +512,22 @@ export function GameFinishedOverlay({
                   )}
                 </div>
 
-                {/* Actions */}
+                {/* Actions - mobile-friendly touch targets */}
                 <div className="p-4 border-t border-edge/30 space-y-3">
                   <div className="flex gap-3">
                     <button
                       onClick={() => { playSound('click'); onDismiss() }}
-                      className="flex-1 py-3.5 px-4 bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge transition-all"
+                      className="flex-1 py-4 px-4 min-h-[48px] bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge active:bg-smoke/70 transition-all touch-manipulation"
                     >
                       DETAILS
                     </button>
                     <button
                       onClick={() => { playSound('click'); onPlayAgain() }}
                       className={`
-                        flex-1 py-3.5 px-4 rounded-xl font-display text-sm tracking-wider text-void transition-all
+                        flex-1 py-4 px-4 min-h-[48px] rounded-xl font-display text-sm tracking-wider text-void transition-all touch-manipulation
                         ${iAmSurvivor
-                          ? 'bg-gradient-to-r from-alive to-alive-light hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] hover:scale-[1.02]'
-                          : 'bg-gradient-to-r from-gold to-gold-dark hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] hover:scale-[1.02]'
+                          ? 'bg-gradient-to-r from-alive to-alive-light hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] active:opacity-80'
+                          : 'bg-gradient-to-r from-gold to-gold-dark hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] active:opacity-80'
                         }
                       `}
                     >
@@ -529,7 +536,7 @@ export function GameFinishedOverlay({
                   </div>
                   <button
                     onClick={() => { playSound('click'); setShowVerifier(true) }}
-                    className="w-full py-2.5 px-4 bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold hover:text-gold-light hover:border-gold/50 hover:bg-gold/20 transition-all flex items-center justify-center gap-2"
+                    className="w-full py-3 px-4 min-h-[48px] bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold hover:text-gold-light hover:border-gold/50 hover:bg-gold/20 active:bg-gold/30 transition-all flex items-center justify-center gap-2 touch-manipulation"
                   >
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
@@ -543,14 +550,14 @@ export function GameFinishedOverlay({
         </AnimatePresence>
       </div>
 
-      {/* Close button */}
+      {/* Close button - fixed position so it's always accessible */}
       {phase === 'results' && (
         <motion.button
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.8 }}
           onClick={onDismiss}
-          className="absolute top-4 right-4 p-3 text-ash/50 hover:text-chalk hover:bg-white/5 rounded-full transition-all"
+          className="fixed top-4 right-4 z-[60] p-3 min-w-[44px] min-h-[44px] text-ash/50 hover:text-chalk hover:bg-white/5 active:bg-white/10 rounded-full transition-all touch-manipulation"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />

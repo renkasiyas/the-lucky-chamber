@@ -115,6 +115,7 @@ export const WSEvent = {
   LEAVE_QUEUE: 'leave_queue',
   SUBMIT_CLIENT_SEED: 'submit_client_seed',
   PULL_TRIGGER: 'pull_trigger',
+  CONFIRM_RESULTS_SHOWN: 'confirm_results_shown', // Client signals victory modal is displayed
 
   // Server -> Client
   ROOM_UPDATE: 'room:update',
@@ -122,6 +123,7 @@ export const WSEvent = {
   TURN_START: 'turn:start',
   ROUND_RESULT: 'round:result',
   GAME_END: 'game:end',
+  PAYOUT_SENT: 'payout:sent', // Server signals payout transaction was sent
   RNG_REVEAL: 'rng:reveal',
   CONNECTION_COUNT: 'connection:count',
   ERROR: 'error',
@@ -162,6 +164,11 @@ export interface PullTriggerPayload {
   walletAddress: string
 }
 
+export interface ConfirmResultsShownPayload {
+  roomId: string
+  walletAddress: string
+}
+
 export interface TurnStartPayload {
   roomId: string
   seatIndex: number
@@ -192,6 +199,11 @@ export interface GameEndPayload {
   roomId: string
   survivors: number[] // Seat indices
   payouts: Payout[]
+  payoutTxId: string // May be 'pending' until payout is sent
+}
+
+export interface PayoutSentPayload {
+  roomId: string
   payoutTxId: string
 }
 

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- ABOUTME: Favicon representing the chamber/revolver cylinder -->
+  <!-- ABOUTME: Matches the home page chamber visual with 6 slots, one loaded -->
+
+  <!-- Outer ring -->
+  <circle cx="16" cy="16" r="15" fill="#0D0D0D" stroke="#3A3A3C" stroke-width="1"/>
+
+  <!-- Inner ring -->
+  <circle cx="16" cy="16" r="12" fill="#141416" stroke="#2A2A2C" stroke-width="0.5"/>
+
+  <!-- Chamber slots - 6 positions at 60° intervals, starting at top -->
+  <!-- Slot 0 - top (empty) -->
+  <circle cx="16" cy="7" r="2.5" fill="#1A1A1C" stroke="#3A3A3C" stroke-width="0.5"/>
+
+  <!-- Slot 1 - top right (empty) -->
+  <circle cx="23.8" cy="11.5" r="2.5" fill="#1A1A1C" stroke="#3A3A3C" stroke-width="0.5"/>
+
+  <!-- Slot 2 - bottom right (empty) -->
+  <circle cx="23.8" cy="20.5" r="2.5" fill="#1A1A1C" stroke="#3A3A3C" stroke-width="0.5"/>
+
+  <!-- Slot 3 - bottom (LOADED - blood red) -->
+  <circle cx="16" cy="25" r="2.5" fill="#8B0000" stroke="#DC143C" stroke-width="0.5"/>
+
+  <!-- Slot 4 - bottom left (empty) -->
+  <circle cx="8.2" cy="20.5" r="2.5" fill="#1A1A1C" stroke="#3A3A3C" stroke-width="0.5"/>
+
+  <!-- Slot 5 - top left (empty) -->
+  <circle cx="8.2" cy="11.5" r="2.5" fill="#1A1A1C" stroke="#3A3A3C" stroke-width="0.5"/>
+
+  <!-- Center pin -->
+  <circle cx="16" cy="16" r="3" fill="#1A1A1C" stroke="#4A4A4C" stroke-width="0.5"/>
+</svg>

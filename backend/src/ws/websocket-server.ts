@@ -11,6 +11,7 @@ import {
   type LeaveQueuePayload,
   type SubmitClientSeedPayload,
   type PullTriggerPayload,
+  type ConfirmResultsShownPayload,
   type RoomUpdatePayload,
   type ErrorPayload,
 } from '../../../shared/index.js'
@@ -197,6 +198,10 @@ export class WSServer {
           this.handlePullTrigger(ws, payload as PullTriggerPayload)
           break
 
+        case WSEvent.CONFIRM_RESULTS_SHOWN:
+          this.handleConfirmResultsShown(ws, payload as ConfirmResultsShownPayload)
+          break
+
         case 'subscribe_room':
           this.handleSubscribeRoom(ws, payload as { roomId: string; walletAddress: string })
           break
@@ -363,6 +368,20 @@ export class WSServer {
     if (!result.success) {
       this.sendError(ws, result.error || 'Failed to pull trigger')
     }
+  }
+
+  private handleConfirmResultsShown(ws: WebSocket, payload: ConfirmResultsShownPayload): void {
+    const { roomId } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
+
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+
+    roomManager.confirmResultsShown(roomId, client.walletAddress)
   }
 
   private broadcastRoomUpdate(roomId: string): void {

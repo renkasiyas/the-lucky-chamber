@@ -281,6 +281,12 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     ws.send('pull_trigger', { roomId: room.id, walletAddress: address })
   }, [address, room, ws])
 
+  // Called when GameFinishedOverlay is shown - signals backend to send payout
+  const handleResultsShown = useCallback(() => {
+    if (!address || !room) return
+    ws.send('confirm_results_shown', { roomId: room.id, walletAddress: address })
+  }, [address, room, ws])
+
   const retryDeposit = async () => {
     if (!address || !room) return
     const mySeat = room.seats.find((s) => s.walletAddress === address)
@@ -514,6 +520,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           explorerUrl={explorerUrl}
           onDismiss={() => setShowGameFinished(false)}
           onPlayAgain={() => router.push('/lobby')}
+          onResultsShown={handleResultsShown}
         />
       )}
 
