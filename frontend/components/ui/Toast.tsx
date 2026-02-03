@@ -215,23 +215,58 @@ export function Toaster() {
 
 function ToasterInner() {
   const context = useContext(ToastContext)
+  const [isExpanded, setIsExpanded] = useState(false)
   if (!context) return null
 
   const { toasts, removeToast } = context
 
   if (toasts.length === 0) return null
 
+  // Stack toasts visually - newest on top
+  const reversedToasts = [...toasts].reverse()
+
   return (
     <div
-      className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-4 z-[100] flex flex-col gap-1.5 sm:max-w-xs pointer-events-none"
+      className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-4 z-[100] sm:max-w-xs pointer-events-none"
       aria-live="polite"
       aria-label="Notifications"
+      onMouseEnter={() => setIsExpanded(true)}
+      onMouseLeave={() => setIsExpanded(false)}
+      onTouchStart={() => setIsExpanded(true)}
     >
-      {toasts.map((toast) => (
-        <div key={toast.id} className="pointer-events-auto">
-          <ToastItem toast={toast} onClose={() => removeToast(toast.id)} />
+      <div className="relative">
+        {reversedToasts.map((toast, index) => {
+          const isTop = index === 0
+          const stackOffset = isExpanded ? index * 48 : index * 8
+          const scale = isExpanded ? 1 : 1 - index * 0.03
+          const opacity = isExpanded ? 1 : 1 - index * 0.15
+
+          return (
+            <div
+              key={toast.id}
+              className="pointer-events-auto transition-all duration-200 ease-out"
+              style={{
+                position: index === 0 ? 'relative' : 'absolute',
+                bottom: index === 0 ? 0 : stackOffset,
+                left: 0,
+                right: 0,
+                transform: `scale(${scale})`,
+                transformOrigin: 'bottom center',
+                opacity,
+                zIndex: reversedToasts.length - index,
+              }}
+            >
+              <ToastItem toast={toast} onClose={() => removeToast(toast.id)} />
+            </div>
+          )
+        })}
+      </div>
+      {/* Toast count badge when collapsed and multiple toasts */}
+      {!isExpanded && toasts.length > 1 && (
+        <div className="absolute -top-2 -right-2 w-5 h-5 bg-ember text-void text-xs font-bold rounded-full flex items-center justify-center pointer-events-none">
+          {toasts.length}
         </div>
-      ))}
+      )}
     </div>
   )
 }

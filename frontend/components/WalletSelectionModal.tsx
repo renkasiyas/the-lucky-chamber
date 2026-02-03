@@ -12,7 +12,8 @@ interface WalletSelectionModalProps {
   onClose: () => void
 }
 
-const KASANOVA_DEEPLINK = 'https://go.kasanova.app/theluckychamber'
+// Kasanova wallet deeplink - configured per environment in .env files
+const KASANOVA_DEEPLINK = process.env.NEXT_PUBLIC_KASANOVA_DEEPLINK || 'https://dev-go.kasanova.app/theluckychamber'
 
 export function WalletSelectionModal({ isOpen, onClose }: WalletSelectionModalProps) {
   useEffect(() => {

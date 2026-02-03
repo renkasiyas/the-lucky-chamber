@@ -2,13 +2,14 @@
 // ABOUTME: Tests room loading, wallet checks, seat display, and WebSocket integration
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import RoomPage from '../../../../app/room/[id]/page'
 
 // Mock Next.js router and params
 const mockPush = vi.fn()
+const mockRouter = { push: mockPush }
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => mockRouter,
 }))
 
 // Mock hooks
@@ -145,8 +146,11 @@ describe('RoomPage', () => {
         network: null,
       })
 
-      render(<RoomPage params={mockParams} />)
+      await act(async () => {
+        render(<RoomPage params={mockParams} />)
+      })
 
+      // Wait for the useEffect to trigger the redirect
       await waitFor(() => {
         expect(mockPush).toHaveBeenCalledWith('/')
       })
@@ -216,21 +220,21 @@ describe('RoomPage', () => {
       render(<RoomPage params={mockParams} />)
 
       await waitFor(() => {
-        expect(mockWsSubscribe).toHaveBeenCalledWith(
-          `room:${mockRoomId}:update`,
-          expect.any(Function)
-        )
+        expect(mockWsSubscribe).toHaveBeenCalledWith('room:update', expect.any(Function))
       })
     })
 
-    it('subscribes to room result events', async () => {
+    it('subscribes to game events', async () => {
       render(<RoomPage params={mockParams} />)
 
       await waitFor(() => {
-        expect(mockWsSubscribe).toHaveBeenCalledWith(
-          `room:${mockRoomId}:result`,
-          expect.any(Function)
-        )
+        expect(mockWsSubscribe).toHaveBeenCalledWith('game:start', expect.any(Function))
+        expect(mockWsSubscribe).toHaveBeenCalledWith('round:result', expect.any(Function))
+        expect(mockWsSubscribe).toHaveBeenCalledWith('game:end', expect.any(Function))
+        expect(mockWsSubscribe).toHaveBeenCalledWith('rng:reveal', expect.any(Function))
+        expect(mockWsSubscribe).toHaveBeenCalledWith('turn:start', expect.any(Function))
+        expect(mockWsSubscribe).toHaveBeenCalledWith('player:forfeit', expect.any(Function))
+        expect(mockWsSubscribe).toHaveBeenCalledWith('payout:sent', expect.any(Function))
       })
     })
 
@@ -251,11 +255,11 @@ describe('RoomPage', () => {
   })
 
   describe('Room Display', () => {
-    it('renders room heading when loaded', async () => {
+    it('renders room mode when loaded', async () => {
       render(<RoomPage params={mockParams} />)
 
       await waitFor(() => {
-        expect(screen.getByText('GAME ROOM')).toBeInTheDocument()
+        expect(screen.getByText('REGULAR')).toBeInTheDocument()
       })
     })
 
@@ -278,12 +282,12 @@ describe('RoomPage', () => {
   })
 
   describe('Accessibility', () => {
-    it('uses semantic heading tag', async () => {
+    it('renders room mode in card title', async () => {
       render(<RoomPage params={mockParams} />)
 
       await waitFor(() => {
-        const heading = screen.getByText('GAME ROOM')
-        expect(heading.closest('h1')).toBeInTheDocument()
+        const mode = screen.getByText('REGULAR')
+        expect(mode.closest('h3')).toBeInTheDocument() // CardTitle uses h3
       })
     })
   })

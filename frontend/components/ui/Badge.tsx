@@ -48,7 +48,7 @@ export function Badge({
     <span
       className={`
         inline-flex items-center gap-1.5
-        font-mono uppercase tracking-wider rounded-full border
+        font-sans font-semibold uppercase tracking-wider rounded-full border
         ${variantStyles[variant]}
         ${sizeStyles[size]}
         ${pulse ? 'animate-pulse' : ''}

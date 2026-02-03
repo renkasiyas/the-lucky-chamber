@@ -426,17 +426,29 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     }
   }, [room?.id]) // Only run when room ID changes (initial load)
 
-  // Initialize revealedRounds on mount/room load (for page refresh - show past rounds)
-  // This allows players joining mid-game to see the Game Log immediately
-  // New rounds that arrive via WebSocket will be added only when their animation completes
+  // Track if we've done initial round reveal (to prevent re-triggering on state changes)
+  const initialRoundsRevealedRef = useRef(false)
+
+  // Initialize revealedRounds ONLY on first load when game is already SETTLED (page refresh scenario)
+  // During active gameplay, rounds are revealed ONLY through ChamberGame animation callbacks
+  // This prevents spoilers when backend processes rounds faster than frontend can animate
   useEffect(() => {
     if (!room) return
-    // Only initialize if there are rounds to show
-    if (room.rounds.length > 0) {
+    if (initialRoundsRevealedRef.current) return // Already did initial reveal, don't do it again
+
+    // ONLY pre-populate rounds if page loaded when game was ALREADY SETTLED (page refresh)
+    // Check prevRoomStateRef is null (first load) AND state is SETTLED
+    // If we saw PLAYING first, we should NOT auto-reveal rounds when it transitions to SETTLED
+    if (prevRoomStateRef.current === null && room.state === 'SETTLED' && room.rounds.length > 0) {
+      initialRoundsRevealedRef.current = true
       const roundIndices = new Set(room.rounds.map(r => r.index))
       setRevealedRounds(roundIndices)
+    } else if (prevRoomStateRef.current === null && room.state !== 'SETTLED') {
+      // Mark that we've processed initial state (was not SETTLED)
+      // This prevents auto-reveal when game later transitions to SETTLED
+      initialRoundsRevealedRef.current = true
     }
-  }, [room?.id]) // Only run when room ID changes (initial load)
+  }, [room?.id, room?.state]) // Check on load and state changes, but ref guards against re-running
 
   // Countdown timer for FUNDING state (room expiration timeout)
   useEffect(() => {
@@ -536,7 +548,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   )
 
   return (
-    <div className="min-h-screen bg-void pt-14 md:pt-20 pb-4 md:pb-8">
+    <div className="min-h-screen bg-void pt-10 md:pt-20 pb-4 md:pb-8">
       {/* Background effects */}
       <div className="fixed inset-0 bg-gradient-to-b from-void via-noir to-void pointer-events-none" />
       {uiRoomState === 'PLAYING' && (
@@ -568,11 +580,11 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         <Card variant="elevated" className="animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
           <CardHeader>
             <div className="flex items-center justify-between w-full">
-              <div className="flex items-center gap-3">
-                <CardTitle className={room.mode === 'EXTREME' ? 'text-blood-light' : 'text-gold'}>
+              <div className="flex items-center gap-2 md:gap-3">
+                <CardTitle className={`text-base md:text-lg ${room.mode === 'EXTREME' ? 'text-blood-light' : 'text-gold'}`}>
                   {room.mode}
                 </CardTitle>
-                <RoomStateBadge state={uiRoomState} />
+                <RoomStateBadge state={uiRoomState} size="sm" />
               </div>
               <ProvablyFairButton room={room} explorerBaseUrl={explorerUrl} />
             </div>
@@ -768,7 +780,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         {/* Keep ChamberGame mounted during SETTLED to let death animation complete */}
         {(room.state === 'PLAYING' || (room.state === 'SETTLED' && !showGameFinished)) && (
           <Card variant="danger" className="!bg-noir/80 border-blood/40">
-            <CardContent className="!p-2 md:!p-6 !pt-3 md:!pt-6">
+            <CardContent className="!p-1 md:!p-6 !pt-2 md:!pt-6">
               <ChamberGame
                 room={room}
                 currentRound={room.rounds.length}
@@ -881,8 +893,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </Card>
         )}
 
-        {/* Results - always show when SETTLED (overlay can be dismissed but card remains) */}
-        {room.state === 'SETTLED' && (
+        {/* Results - only show when UI has transitioned to SETTLED (after animations complete) */}
+        {isUiSettled && (
           <Card className="border-alive/30 animate-slide-up" style={{ animationDelay: '0.3s', opacity: 0 }}>
             <CardHeader>
               <CardTitle className="text-alive-light">GAME OVER</CardTitle>

@@ -158,7 +158,8 @@ describe('WalletSelectionModal', () => {
       const kasanovaButton = screen.getByText('Kasanova').closest('button')
       kasanovaButton?.click()
 
-      expect(window.location.href).toBe('https://go.kasanova.app/theluckychamber')
+      // In test/dev environment, uses dev deeplink; production uses prod deeplink
+      expect(window.location.href).toBe('https://dev-go.kasanova.app/theluckychamber')
     })
 
     it('shows Open in app message for Kasanova', () => {

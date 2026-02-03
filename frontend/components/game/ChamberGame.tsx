@@ -743,10 +743,10 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
           MAIN CHAMBER AREA
           ══════════════════════════════════════════════════════════════════════ */}
 
-      <div className="relative pt-2 md:pt-6 pb-2 md:pb-4">
+      <div className="relative pt-1 md:pt-6 pb-1 md:pb-4">
 
         {/* Stats Bar - compact on mobile */}
-        <div className="flex justify-between items-center mb-3 md:mb-6 px-2">
+        <div className="flex justify-between items-center mb-2 md:mb-6 px-2">
           <div className="text-center">
             <div className="text-[8px] md:text-[10px] font-mono text-ash/60 uppercase tracking-widest">Alive</div>
             <div className={`text-2xl md:text-3xl font-display transition-colors duration-200 ${isPulling ? 'text-blood-light' : 'text-alive-light'}`}>
@@ -971,7 +971,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
             STATUS / CONTROLS AREA
             ════════════════════════════════════════════════════════════════════ */}
 
-        <div className="mt-4 md:mt-8 text-center min-h-[120px] md:min-h-[160px]">
+        <div className="mt-2 md:mt-8 text-center min-h-[100px] md:min-h-[160px]">
           <AnimatePresence mode="wait">
 
             {/* IDLE - Watching someone else */}
@@ -1077,14 +1077,14 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
                 </div>
 
                 <button
+                  type="button"
                   onClick={handlePullTrigger}
-                  className="relative px-10 md:px-14 py-3 md:py-4 bg-gradient-to-b from-blood via-blood to-blood-dark border-2 border-blood-light/70 rounded-xl font-display text-lg md:text-xl tracking-[0.2em] text-chalk shadow-[0_0_30px_rgba(139,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.1)] hover:shadow-[0_0_50px_rgba(139,0,0,0.7)] hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer"
+                  onTouchEnd={(e) => { e.preventDefault(); handlePullTrigger() }}
+                  className="relative px-10 md:px-14 py-3 md:py-4 min-h-[56px] bg-gradient-to-b from-blood via-blood to-blood-dark border-2 border-blood-light/70 rounded-xl font-display text-lg md:text-xl tracking-[0.2em] text-chalk shadow-[0_0_30px_rgba(139,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.1)] hover:shadow-[0_0_50px_rgba(139,0,0,0.7)] hover:scale-105 active:scale-95 transition-all duration-150 cursor-pointer touch-manipulation select-none"
                 >
-                  PULL TRIGGER
-                  <motion.div
-                    className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -skew-x-12 rounded-xl overflow-hidden"
-                    animate={{ x: ['-200%', '200%'] }}
-                    transition={{ repeat: Infinity, duration: 2.5, ease: 'linear' }}
+                  <span className="relative z-10">PULL TRIGGER</span>
+                  <div
+                    className="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -skew-x-12 rounded-xl overflow-hidden pointer-events-none animate-shimmer"
                   />
                 </button>
 
