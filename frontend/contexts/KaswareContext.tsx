@@ -138,8 +138,21 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         throw new Error('Wallet not connected')
       }
 
-      const txId = await kasware.sendKaspa(toAddress, amount)
-      return txId
+      try {
+        const txId = await kasware.sendKaspa(toAddress, amount)
+        return txId
+      } catch (err: unknown) {
+        // Log full error for debugging wallet API issues
+        console.error('[KASWARE] sendKaspa failed:', {
+          error: err,
+          type: typeof err,
+          keys: err && typeof err === 'object' ? Object.keys(err) : [],
+          toAddress,
+          amount,
+        })
+        // Re-throw the original error so caller can handle it
+        throw err
+      }
     },
     [getKasware, connected]
   )

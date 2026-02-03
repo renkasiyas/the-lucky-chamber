@@ -838,6 +838,12 @@ export class RoomManager {
     const room = store.getRoom(roomId)
     if (!room) return
 
+    // Prevent re-entry if already settled
+    if (room.state === RoomState.SETTLED) {
+      logger.warn('settleGame called on already-settled room', { roomId })
+      return
+    }
+
     const survivors = room.seats.filter((s) => s.alive)
 
     // Convert seat price to sompi and calculate pot in sompi (integer math)
@@ -1003,6 +1009,7 @@ export class RoomManager {
     // Clean up server seed and pending game state from memory
     this.serverSeeds.delete(roomId)
     this.pendingGames.delete(roomId)
+    this.pendingPayouts.delete(roomId)
 
     logRoomEvent('Room aborted, processing refunds', roomId)
 

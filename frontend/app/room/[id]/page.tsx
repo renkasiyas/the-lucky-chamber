@@ -171,6 +171,13 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       }
     })
 
+    const unsubPayoutSent = ws.subscribe('payout:sent', (payload: { roomId: string; payoutTxId: string }) => {
+      if (payload.roomId === roomId) {
+        // Refresh room to get updated payoutTxId
+        fetchRoomRef.current()
+      }
+    })
+
     return () => {
       unsubRoomUpdate()
       unsubGameStart()
@@ -179,6 +186,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       unsubRngReveal()
       unsubTurnStart()
       unsubPlayerForfeit()
+      unsubPayoutSent()
     }
   }, [ws.connected, ws.subscribe, ws.send, roomId, address])
 
@@ -257,6 +265,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         } catch (depositErr) {
           setDepositFailed(true)
           setDepositSent(false)
+          // Log full error object for debugging mobile Kasware issues
+          console.error('[DEPOSIT_ERROR] Full error object:', depositErr)
+          console.error('[DEPOSIT_ERROR] Error type:', typeof depositErr)
+          console.error('[DEPOSIT_ERROR] Error keys:', depositErr ? Object.keys(depositErr as object) : 'null')
           throw depositErr
         }
 
@@ -269,7 +281,18 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         })
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
+      // Handle structured error objects from wallet APIs (e.g., Kasware mobile)
+      // Example: { code: 123, message: "User rejected", data: {...} }
+      let message = 'Unknown error'
+      if (err instanceof Error) {
+        message = err.message
+      } else if (typeof err === 'object' && err !== null) {
+        // Try to extract message from common wallet error formats
+        const errObj = err as { message?: string; error?: string; reason?: string }
+        message = errObj.message || errObj.error || errObj.reason || JSON.stringify(err)
+      } else {
+        message = String(err)
+      }
       toast.error(`Failed to join: ${message}`)
     } finally {
       setJoining(false)
@@ -316,7 +339,18 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         clientSeed: signature,
       })
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
+      // Handle structured error objects from wallet APIs (e.g., Kasware mobile)
+      // Example: { code: 123, message: "User rejected", data: {...} }
+      let message = 'Unknown error'
+      if (err instanceof Error) {
+        message = err.message
+      } else if (typeof err === 'object' && err !== null) {
+        // Try to extract message from common wallet error formats
+        const errObj = err as { message?: string; error?: string; reason?: string }
+        message = errObj.message || errObj.error || errObj.reason || JSON.stringify(err)
+      } else {
+        message = String(err)
+      }
       toast.error(`Failed to deposit: ${message}`)
     } finally {
       setRetryingDeposit(false)
@@ -494,7 +528,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const currentStep = (rawStep === 5 && !isUiSettled) ? 4 : rawStep
   const confirmedCount = room.seats.filter(s => s.confirmed).length
   const survivors = room.seats.filter(s => s.alive)
-  const { pot, houseCut, payoutPool, perSurvivor } = calculatePayouts(
+  const { pot, payoutPool, perSurvivor } = calculatePayouts(
     room.seatPrice,
     confirmedCount,
     room.houseCutPercent,

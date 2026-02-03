@@ -3,7 +3,7 @@
 
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Room } from '../../../shared/index'
 import { formatKAS, calculatePayouts } from '../../lib/format'
@@ -31,14 +31,15 @@ export function GameFinishedOverlay({
   // Go straight to reveal to avoid "The chamber falls silent" after we just saw an explosion
   const [phase, setPhase] = useState<'suspense' | 'intro' | 'reveal' | 'results'>('reveal')
   const [showVerifier, setShowVerifier] = useState(false)
-  const { play: playSound, stop: stopSound } = useSound()
+  const { play: playSound } = useSound()
+  const resultsShownRef = useRef(false)
 
   const survivors = room.seats.filter(s => s.alive)
   const eliminated = room.seats.filter(s => s.walletAddress && !s.alive)
   const mySeat = room.seats.find(s => s.walletAddress === myAddress)
   const iAmSurvivor = mySeat?.alive ?? false
   const confirmedCount = room.seats.filter(s => s.confirmed).length
-  const { pot, houseCut, payoutPool, perSurvivor } = calculatePayouts(
+  const { pot, perSurvivor } = calculatePayouts(
     room.seatPrice,
     confirmedCount,
     room.houseCutPercent,
@@ -59,13 +60,18 @@ export function GameFinishedOverlay({
     })),
   [])
 
+  // Signal backend on mount (once only)
   useEffect(() => {
-    // Signal backend that results are being shown - this triggers the payout transaction
-    // Called immediately on mount so the payout doesn't arrive before the modal
-    onResultsShown?.()
+    if (!resultsShownRef.current) {
+      resultsShownRef.current = true
+      onResultsShown?.()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount
 
-    // We start at 'reveal' phase - the drama already happened in ChamberGame
-    // Just play win sound if survivor and transition to results
+  // Play win sound once and transition to results
+  useEffect(() => {
+    // Play win sound only once for survivors
     if (iAmSurvivor) {
       playSound('win')
     }
@@ -76,7 +82,8 @@ export function GameFinishedOverlay({
     return () => {
       clearTimeout(t1)
     }
-  }, [iAmSurvivor, playSound, onResultsShown])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount - iAmSurvivor won't change
 
   return (
     <motion.div
@@ -550,14 +557,16 @@ export function GameFinishedOverlay({
         </AnimatePresence>
       </div>
 
-      {/* Close button - fixed position so it's always accessible */}
-      {phase === 'results' && (
+      {/* Close button - fixed position so it's always accessible, hidden when verifier modal open */}
+      {/* Always show close button (with different opacity based on phase) to ensure users can always exit */}
+      {!showVerifier && (
         <motion.button
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.8 }}
+          animate={{ opacity: phase === 'results' ? 1 : 0.5 }}
+          transition={{ delay: phase === 'results' ? 0.8 : 0 }}
           onClick={onDismiss}
           className="fixed top-4 right-4 z-[60] p-3 min-w-[44px] min-h-[44px] text-ash/50 hover:text-chalk hover:bg-white/5 active:bg-white/10 rounded-full transition-all touch-manipulation"
+          aria-label="Close"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />

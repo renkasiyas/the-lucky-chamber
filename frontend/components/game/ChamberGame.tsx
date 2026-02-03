@@ -657,7 +657,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   // MEMOIZED VALUES
   // ═══════════════════════════════════════════════════════════════════════════
   const dustParticles = useMemo(() =>
-    Array.from({ length: 8 }, (_, i) => ({
+    Array.from({ length: 8 }, () => ({
       x: 15 + Math.random() * 70,
       y: 15 + Math.random() * 70,
       size: 1 + Math.random() * 2,
@@ -672,7 +672,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
   const isSpinning = phase === 'spin' || phase === 'respin'
   const showTriggerButton = phase === 'ready'
   const isPulling = phase === 'pulling'
-  const isRevealing = phase === 'reveal'
+  // Note: phase === 'reveal' is checked inline where needed
 
   return (
     <div className={`relative w-full max-w-xl mx-auto ${revealResult === 'bang' ? 'animate-shake' : ''}`}>
