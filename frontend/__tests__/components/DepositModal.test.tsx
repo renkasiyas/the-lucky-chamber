@@ -2,7 +2,7 @@
 // ABOUTME: Tests QR code generation, clipboard API, keyboard handling, and accessibility
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DepositModal } from '../../components/DepositModal'
 import QRCode from 'qrcode'
@@ -179,39 +179,43 @@ describe('DepositModal', () => {
   })
 
   it('copies address to clipboard when Copy button is clicked', async () => {
-    const user = userEvent.setup()
     render(<DepositModal {...defaultProps} />)
 
     const copyButton = screen.getByRole('button', { name: /copy/i })
-    await user.click(copyButton)
+    fireEvent.click(copyButton)
 
-    expect(writeTextMock).toHaveBeenCalledWith(defaultProps.depositAddress)
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(defaultProps.depositAddress)
+    })
   })
 
   it('shows "Copied!" feedback after successful copy', async () => {
     vi.useFakeTimers()
-    const user = userEvent.setup({ delay: null }) // disable delay with fake timers
 
     render(<DepositModal {...defaultProps} />)
 
     const copyButton = screen.getByText('Copy')
-    await user.click(copyButton)
 
-    expect(await screen.findByText('✓ Copied!')).toBeInTheDocument()
+    await act(async () => {
+      fireEvent.click(copyButton)
+      // Wait for async clipboard operation to complete
+      await Promise.resolve()
+    })
+
+    // Should now show "Copied!" after state update
+    expect(screen.getByText('✓ Copied!')).toBeInTheDocument()
 
     // Feedback should disappear after 2 seconds
-    vi.advanceTimersByTime(2000)
-
-    await waitFor(() => {
-      expect(screen.getByText('Copy')).toBeInTheDocument()
+    act(() => {
+      vi.advanceTimersByTime(2000)
     })
+
+    expect(screen.getByText('Copy')).toBeInTheDocument()
 
     vi.useRealTimers()
   })
 
   it('handles clipboard write failure gracefully', async () => {
-    const user = userEvent.setup()
-
     // Mock clipboard failure
     writeTextMock.mockRejectedValueOnce(new Error('Clipboard access denied'))
 
@@ -220,16 +224,18 @@ describe('DepositModal', () => {
     const copyButton = screen.getByText('Copy')
 
     // Should not throw
-    await user.click(copyButton)
-
-    // Should not show "Copied!" on failure
-    await waitFor(() => {
-      expect(screen.queryByText('✓ Copied!')).not.toBeInTheDocument()
+    await act(async () => {
+      fireEvent.click(copyButton)
+      // Wait for the promise rejection to be handled
+      await Promise.resolve()
     })
+
+    // Should not show "Copied!" on failure (silent fail)
+    expect(screen.getByText('Copy')).toBeInTheDocument()
+    expect(screen.queryByText('✓ Copied!')).not.toBeInTheDocument()
   })
 
-  it('calls onClose when "Close" button is clicked', async () => {
-    const user = userEvent.setup()
+  it('calls onClose when "Close" button is clicked', () => {
     const onClose = vi.fn()
 
     render(<DepositModal {...defaultProps} onClose={onClose} />)
@@ -239,7 +245,7 @@ describe('DepositModal', () => {
     const closeButton = buttons.find(btn => btn.textContent === 'Close')
     expect(closeButton).toBeDefined()
 
-    await user.click(closeButton!)
+    fireEvent.click(closeButton!)
 
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -258,14 +264,13 @@ describe('DepositModal', () => {
     expect(screen.queryByText(/sent funds/i)).not.toBeInTheDocument()
   })
 
-  it('calls onDeposit when "I\'ve Sent Funds" button is clicked', async () => {
-    const user = userEvent.setup()
+  it('calls onDeposit when "I\'ve Sent Funds" button is clicked', () => {
     const onDeposit = vi.fn()
 
     render(<DepositModal {...defaultProps} onDeposit={onDeposit} />)
 
     const depositButton = screen.getByText(/sent funds/i)
-    await user.click(depositButton)
+    fireEvent.click(depositButton)
 
     expect(onDeposit).toHaveBeenCalledTimes(1)
   })
