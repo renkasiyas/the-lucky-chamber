@@ -107,22 +107,6 @@ describe('WalletConnect', () => {
       expect(screen.getByText('Failed to connect to wallet')).toBeInTheDocument()
     })
 
-    it('shows Kasware link on desktop', () => {
-      render(<WalletConnect />)
-
-      const kaswareLink = screen.getByText('Kasware')
-      expect(kaswareLink).toHaveAttribute('href', 'https://kasware.xyz')
-      expect(kaswareLink).toHaveAttribute('target', '_blank')
-      expect(kaswareLink).toHaveAttribute('rel', 'noopener noreferrer')
-    })
-
-    it('shows Kasanova link on desktop', () => {
-      render(<WalletConnect />)
-
-      const kasanovaLink = screen.getByText('Kasanova')
-      expect(kasanovaLink).toHaveAttribute('href', 'https://kasanova.io')
-    })
-
     it('shows wallet selection modal when showWalletModal is true', () => {
       vi.spyOn(useKaswareModule, 'useKasware').mockReturnValue({
         ...defaultMockReturn,

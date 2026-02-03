@@ -52,7 +52,7 @@ describe('useKNS', () => {
   })
 
   it('handles no domain gracefully', async () => {
-    const mockAddress = 'kaspatest:qq1234567890abcdef'
+    const mockAddress = 'kaspatest:qqnodomain111111111'
 
     ;(global.fetch as any).mockResolvedValueOnce({
       ok: true,
@@ -70,7 +70,7 @@ describe('useKNS', () => {
   })
 
   it('handles fetch errors silently', async () => {
-    const mockAddress = 'kaspatest:qq1234567890abcdef'
+    const mockAddress = 'kaspatest:qqfetcherror22222222'
 
     ;(global.fetch as any).mockRejectedValueOnce(new Error('Network error'))
 
@@ -85,7 +85,7 @@ describe('useKNS', () => {
   })
 
   it('handles HTTP error responses silently', async () => {
-    const mockAddress = 'kaspatest:qq1234567890abcdef'
+    const mockAddress = 'kaspatest:qqhttperror33333333'
 
     ;(global.fetch as any).mockResolvedValueOnce({
       ok: false,
@@ -102,8 +102,8 @@ describe('useKNS', () => {
   })
 
   it('caches results to avoid duplicate fetches', async () => {
-    const mockAddress = 'kaspatest:qq1234567890abcdef'
-    const mockDomain = 'alice.kas'
+    const mockAddress = 'kaspatest:qqcachetest44444444'
+    const mockDomain = 'cached.kas'
 
     ;(global.fetch as any).mockResolvedValueOnce({
       ok: true,
@@ -132,9 +132,9 @@ describe('useKNS', () => {
   })
 
   it('refetch bypasses cache', async () => {
-    const mockAddress = 'kaspatest:qq1234567890abcdef'
-    const mockDomain1 = 'alice.kas'
-    const mockDomain2 = 'bob.kas'
+    const mockAddress = 'kaspatest:qqrefetch555555555'
+    const mockDomain1 = 'first.kas'
+    const mockDomain2 = 'updated.kas'
 
     ;(global.fetch as any)
       .mockResolvedValueOnce({
@@ -199,8 +199,8 @@ describe('useKNS', () => {
   })
 
   it('clears domain when address becomes null', async () => {
-    const mockAddress = 'kaspatest:qq1234567890abcdef'
-    const mockDomain = 'alice.kas'
+    const mockAddress = 'kaspatest:qqclearnull77777777'
+    const mockDomain = 'clearing.kas'
 
     ;(global.fetch as any).mockResolvedValueOnce({
       ok: true,
@@ -223,7 +223,7 @@ describe('useKNS', () => {
   })
 
   it('caches null results', async () => {
-    const mockAddress = 'kaspatest:qq1234567890abcdef'
+    const mockAddress = 'kaspatest:qqnullcache66666666'
 
     ;(global.fetch as any).mockResolvedValueOnce({
       ok: true,

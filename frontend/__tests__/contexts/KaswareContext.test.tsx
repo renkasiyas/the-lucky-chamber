@@ -30,7 +30,12 @@ describe('KaswareContext', () => {
   let originalSessionStorage: Storage
 
   beforeEach(() => {
-    vi.useFakeTimers()
+    // Don't use fake timers - they interfere with React state updates
+    // vi.useFakeTimers()
+
+    // Ensure kasware is deleted before setting up
+    delete (window as any).kasware
+
     mockWallet = createMockWallet()
 
     // Mock sessionStorage
@@ -54,9 +59,10 @@ describe('KaswareContext', () => {
   })
 
   afterEach(() => {
-    vi.useRealTimers()
+    // vi.useRealTimers()
     global.sessionStorage = originalSessionStorage
     delete (window as any).kasware
+    vi.clearAllMocks()
   })
 
   const wrapper = ({ children }: { children: ReactNode }) => (
@@ -87,14 +93,10 @@ describe('KaswareContext', () => {
   it('sets initializing = false after checking for wallet', async () => {
     const { result } = renderHook(() => useKaswareContext(), { wrapper })
 
-    // Advance through retry attempts
-    await act(async () => {
-      vi.advanceTimersByTime(2000)
-    })
-
+    // Wait for initialization to complete
     await waitFor(() => {
       expect(result.current.initializing).toBe(false)
-    })
+    }, { timeout: 3000 })
   })
 
   it('connects wallet successfully', async () => {
