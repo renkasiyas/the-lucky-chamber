@@ -10,8 +10,6 @@ type SoundName =
   | 'cylinder-spin'
   | 'empty-click'
   | 'eliminated'
-  | 'error'
-  | 'heartbeat'
   | 'reload'
   | 'success'
   | 'win'
@@ -23,8 +21,6 @@ const SOUND_PATHS: Record<SoundName, string> = {
   'cylinder-spin': '/sounds/cylinder-spin.wav',
   'empty-click': '/sounds/empty-click.wav',
   'eliminated': '/sounds/eliminated.mp3',
-  'error': '/sounds/error.mp3',
-  'heartbeat': '/sounds/heartbeat.mp3',
   'reload': '/sounds/reload.wav',
   'success': '/sounds/success.wav',
   'win': '/sounds/win.wav',

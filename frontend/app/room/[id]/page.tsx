@@ -360,7 +360,9 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   }, [room?.state])
 
   // Fallback timeout: if animation callback never fires (unmount, timing issue, etc.),
-  // auto-show results after 10 seconds to prevent UI getting stuck at step 4
+  // auto-show results after 60 seconds to prevent UI getting stuck at step 4
+  // Note: Must be long enough for ALL pending rounds to animate (each ~12s)
+  // With 6 players, worst case is 5 rounds = 60s of animation
   useEffect(() => {
     if (!pendingVictoryRef.current || showGameFinished) return
 
@@ -369,7 +371,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         setShowGameFinished(true)
         pendingVictoryRef.current = false
       }
-    }, 10000) // 10 second safety net
+    }, 60000) // 60 second safety net (allows all rounds to animate)
 
     return () => clearTimeout(fallbackTimeout)
   }, [room?.state, showGameFinished])
@@ -849,8 +851,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </Card>
         )}
 
-        {/* Results - gated behind showGameFinished to let death animation complete */}
-        {room.state === 'SETTLED' && showGameFinished && (
+        {/* Results - always show when SETTLED (overlay can be dismissed but card remains) */}
+        {room.state === 'SETTLED' && (
           <Card className="border-alive/30 animate-slide-up" style={{ animationDelay: '0.3s', opacity: 0 }}>
             <CardHeader>
               <CardTitle className="text-alive-light">GAME OVER</CardTitle>
