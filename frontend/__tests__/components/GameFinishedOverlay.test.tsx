@@ -1,8 +1,8 @@
 // ABOUTME: Unit tests for GameFinishedOverlay component
 // ABOUTME: Tests victory/defeat states, payouts, and user interactions
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { GameFinishedOverlay } from '../../components/game/GameFinishedOverlay'
 import type { Room } from '../../../shared/index'
@@ -22,6 +22,18 @@ vi.mock('../../hooks/useSound', () => ({
     allLoaded: true,
     unlocked: true,
   }),
+}))
+
+// Mock framer-motion to avoid animation timing issues with fake timers
+vi.mock('framer-motion', () => ({
+  motion: {
+    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+    h1: ({ children, ...props }: any) => <h1 {...props}>{children}</h1>,
+    p: ({ children, ...props }: any) => <p {...props}>{children}</p>,
+    path: (props: any) => <path {...props} />,
+    button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
+  },
+  AnimatePresence: ({ children }: any) => <>{children}</>,
 }))
 
 describe('GameFinishedOverlay', () => {
@@ -92,7 +104,7 @@ describe('GameFinishedOverlay', () => {
     expect(screen.getByText('VICTORY!')).toBeInTheDocument()
 
     // Advance timers to trigger phase transition
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     // Should show results phase
     await waitFor(() => {
@@ -124,7 +136,7 @@ describe('GameFinishedOverlay', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
     // Transition to results
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.getByText('2')).toBeInTheDocument() // 2 survivors
@@ -138,7 +150,7 @@ describe('GameFinishedOverlay', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
     // Transition to results
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       // Total pot: 3 * 10 = 30 KAS
@@ -152,7 +164,7 @@ describe('GameFinishedOverlay', () => {
   it('displays total pot in stats grid', async () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.getByText('Total Pot')).toBeInTheDocument()
@@ -163,7 +175,7 @@ describe('GameFinishedOverlay', () => {
   it('displays transaction link when payoutTxId is present', async () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.getByText('Transaction')).toBeInTheDocument()
@@ -185,7 +197,7 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.queryByText('Transaction')).not.toBeInTheDocument()
@@ -200,7 +212,7 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.queryByText('Transaction')).not.toBeInTheDocument()
@@ -208,83 +220,90 @@ describe('GameFinishedOverlay', () => {
   })
 
   it('calls onDismiss when close button is clicked', async () => {
-    const user = userEvent.setup({ delay: null })
+    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
     const onDismiss = vi.fn()
 
     render(<GameFinishedOverlay {...defaultProps} onDismiss={onDismiss} />)
 
     const closeButton = screen.getByLabelText('Close')
     await user.click(closeButton)
+    await vi.runAllTimersAsync()
 
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
   it('calls onDismiss when DETAILS button is clicked', async () => {
-    const user = userEvent.setup({ delay: null })
+    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
     const onDismiss = vi.fn()
 
     render(<GameFinishedOverlay {...defaultProps} onDismiss={onDismiss} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     const detailsButton = await screen.findByText('DETAILS')
     await user.click(detailsButton)
+    await vi.runAllTimersAsync()
 
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
   it('calls onPlayAgain when PLAY AGAIN button is clicked', async () => {
-    const user = userEvent.setup({ delay: null })
+    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
     const onPlayAgain = vi.fn()
 
     render(<GameFinishedOverlay {...defaultProps} onPlayAgain={onPlayAgain} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     const playAgainButton = await screen.findByText('PLAY AGAIN')
     await user.click(playAgainButton)
+    await vi.runAllTimersAsync()
 
     expect(onPlayAgain).toHaveBeenCalledTimes(1)
   })
 
   it('opens provably fair modal when VERIFY FAIRNESS button is clicked', async () => {
-    const user = userEvent.setup({ delay: null })
+    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
 
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     const verifyButton = await screen.findByText('VERIFY FAIRNESS')
     await user.click(verifyButton)
+    await vi.runAllTimersAsync()
 
     expect(screen.getByTestId('provably-fair-modal')).toBeInTheDocument()
   })
 
   it('hides close button when provably fair modal is open', async () => {
-    const user = userEvent.setup({ delay: null })
+    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
 
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     const verifyButton = await screen.findByText('VERIFY FAIRNESS')
     await user.click(verifyButton)
+    await vi.runAllTimersAsync()
 
     expect(screen.queryByLabelText('Close')).not.toBeInTheDocument()
   })
 
   it('closes provably fair modal', async () => {
-    const user = userEvent.setup({ delay: null })
+    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
 
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     const verifyButton = await screen.findByText('VERIFY FAIRNESS')
     await user.click(verifyButton)
+    await vi.runAllTimersAsync()
 
     const closeModalButton = screen.getByText('Close Modal')
     await user.click(closeModalButton)
+    await vi.runAllTimersAsync()
 
     await waitFor(() => {
       expect(screen.queryByTestId('provably-fair-modal')).not.toBeInTheDocument()
@@ -294,7 +313,7 @@ describe('GameFinishedOverlay', () => {
   it('displays player seats sorted by payment order', async () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       // Should display 3 seat indicators (only confirmed players)
@@ -306,7 +325,7 @@ describe('GameFinishedOverlay', () => {
   it('highlights current player seat with YOU label', async () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.getByText('YOU')).toBeInTheDocument()
@@ -316,7 +335,7 @@ describe('GameFinishedOverlay', () => {
   it('marks eliminated players with ✕ symbol', async () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       const eliminated = screen.getByText('✕')
@@ -327,7 +346,7 @@ describe('GameFinishedOverlay', () => {
   it('shows victory emoji and title for winner', async () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.getByText('🏆')).toBeInTheDocument()
@@ -343,7 +362,7 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.getByText('💀')).toBeInTheDocument()
@@ -354,7 +373,7 @@ describe('GameFinishedOverlay', () => {
   it('shows winnings section only for survivors', async () => {
     const { rerender } = render(<GameFinishedOverlay {...defaultProps} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.getByText('Your Winnings')).toBeInTheDocument()
@@ -363,7 +382,7 @@ describe('GameFinishedOverlay', () => {
     // Rerender as eliminated player
     rerender(<GameFinishedOverlay {...defaultProps} myAddress="player2" />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       expect(screen.queryByText('Your Winnings')).not.toBeInTheDocument()
@@ -378,7 +397,7 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    vi.advanceTimersByTime(2000)
+    await act(async () => { await vi.runAllTimersAsync() })
 
     await waitFor(() => {
       // Should not crash, show defeat state

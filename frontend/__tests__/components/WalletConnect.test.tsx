@@ -29,6 +29,8 @@ describe('WalletConnect', () => {
     sendKaspa: vi.fn(),
     error: null,
     network: null,
+    expectedNetwork: 'mainnet',
+    networkMismatch: false,
     balance: null,
     showWalletModal: false,
     closeWalletModal: mockCloseWalletModal,

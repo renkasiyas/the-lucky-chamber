@@ -41,7 +41,7 @@ export function TxLink({
   value,
   type = 'tx',
   label,
-  explorerBaseUrl = 'https://kaspa.stream',
+  explorerBaseUrl = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://kaspa.stream',
   className = '',
   showFull = false,
 }: TxLinkProps) {

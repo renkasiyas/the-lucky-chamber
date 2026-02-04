@@ -6,12 +6,17 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react'
 import type { KaswareWallet } from '../types/kasware'
 
+// Expected network from environment (mainnet or testnet-10)
+const EXPECTED_NETWORK = process.env.NEXT_PUBLIC_NETWORK || 'mainnet'
+
 interface KaswareContextValue {
   address: string | null
   connected: boolean
   connecting: boolean
   initializing: boolean
   network: string | null
+  expectedNetwork: string
+  networkMismatch: boolean
   balance: { total: string; confirmed: string; unconfirmed: string } | null
   connect: () => Promise<void>
   disconnect: () => void
@@ -83,6 +88,15 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       const currentAddress = accounts[0]
       const currentNetwork = await kasware.getNetwork()
       const currentBalance = await kasware.getBalance()
+
+      // Check for network mismatch
+      const isTestnet = currentNetwork.includes('testnet')
+      const expectedIsTestnet = EXPECTED_NETWORK.includes('testnet')
+      if (isTestnet !== expectedIsTestnet) {
+        const expectedName = expectedIsTestnet ? 'Testnet' : 'Mainnet'
+        const actualName = isTestnet ? 'Testnet' : 'Mainnet'
+        setError(`Network mismatch: Your wallet is on ${actualName}, but this app requires ${expectedName}. Please switch your wallet network.`)
+      }
 
       setAddress(currentAddress)
       setNetwork(currentNetwork)
@@ -192,6 +206,17 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
 
     const handleNetworkChanged = (newNetwork: string) => {
       setNetwork(newNetwork)
+      // Check for network mismatch when network changes
+      const isTestnet = newNetwork.includes('testnet')
+      const expectedIsTestnet = EXPECTED_NETWORK.includes('testnet')
+      if (isTestnet !== expectedIsTestnet) {
+        const expectedName = expectedIsTestnet ? 'Testnet' : 'Mainnet'
+        const actualName = isTestnet ? 'Testnet' : 'Mainnet'
+        setError(`Network mismatch: Your wallet is on ${actualName}, but this app requires ${expectedName}. Please switch your wallet network.`)
+      } else {
+        // Clear network-related error if network now matches
+        setError(prev => prev?.includes('Network mismatch') ? null : prev)
+      }
     }
 
     kasware.on('accountsChanged', handleAccountsChanged)
@@ -257,6 +282,11 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(interval)
   }, [connected, refreshBalance])
 
+  // Compute network mismatch
+  const networkMismatch = network !== null && (
+    network.includes('testnet') !== EXPECTED_NETWORK.includes('testnet')
+  )
+
   return (
     <KaswareContext.Provider
       value={{
@@ -265,6 +295,8 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         connecting,
         initializing,
         network,
+        expectedNetwork: EXPECTED_NETWORK,
+        networkMismatch,
         balance,
         connect,
         disconnect,

@@ -176,6 +176,7 @@ export function GameFinishedOverlay({
       {!showVerifier && (
         <button
           type="button"
+          aria-label="Close"
           onClick={handleDismiss}
           onTouchEnd={(e) => { e.preventDefault(); handleDismiss() }}
           className="fixed top-4 right-4 z-[200] p-4 min-w-[56px] min-h-[56px] bg-noir/80 text-ash hover:text-chalk hover:bg-noir active:bg-smoke rounded-full transition-colors"

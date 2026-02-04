@@ -24,6 +24,8 @@ FROM base AS builder
 # Build-time args for Next.js public env vars
 ARG NEXT_PUBLIC_API_URL=http://localhost:4201
 ARG NEXT_PUBLIC_WS_URL=ws://localhost:4202
+ARG NEXT_PUBLIC_NETWORK=mainnet
+ARG NEXT_PUBLIC_EXPLORER_URL=https://kaspa.stream
 
 # Copy shared types
 COPY shared/ ./shared/
@@ -38,6 +40,8 @@ WORKDIR /build/frontend
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+ENV NEXT_PUBLIC_NETWORK=$NEXT_PUBLIC_NETWORK
+ENV NEXT_PUBLIC_EXPLORER_URL=$NEXT_PUBLIC_EXPLORER_URL
 
 # Build the application
 RUN npm run build
