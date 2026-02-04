@@ -8,6 +8,7 @@ networks:
 
 services:
   backend:
+    container_name: lucky-chamber-backend
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -44,6 +45,7 @@ services:
       start_period: 10s
 
   frontend:
+    container_name: lucky-chamber-frontend
     build:
       context: .
       dockerfile: frontend/Dockerfile

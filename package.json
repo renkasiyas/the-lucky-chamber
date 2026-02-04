@@ -13,7 +13,8 @@
     "install:all": "npm install --prefix backend && npm install --prefix frontend && npm install --prefix shared",
     "lint:backend": "cd backend && npm run lint",
     "lint:frontend": "cd frontend && npm run lint",
-    "lint": "npm run lint:backend && npm run lint:frontend"
+    "lint": "npm run lint:backend && npm run lint:frontend",
+    "prepare": "husky"
   },
   "keywords": [
     "kaspa",
@@ -24,6 +25,22 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7"
+  },
+  "lint-staged": {
+    "backend/**/*.{ts,tsx}": [
+      "cd backend && npm run lint"
+    ],
+    "backend/**/*.test.ts": [
+      "cd backend && npm run test -- --run --reporter=verbose"
+    ],
+    "frontend/**/*.{ts,tsx}": [
+      "cd frontend && npm run lint -- --fix"
+    ],
+    "frontend/**/*.test.{ts,tsx}": [
+      "cd frontend && npm run test -- --run --reporter=verbose"
+    ]
   }
 }
