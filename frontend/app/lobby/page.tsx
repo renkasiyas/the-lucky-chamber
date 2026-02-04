@@ -3,7 +3,7 @@
 
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useKasware } from '../../hooks/useKasware'
 import { useWebSocket } from '../../hooks/useWebSocket'
@@ -52,12 +52,14 @@ export default function LobbyPage() {
   const [botStatus, setBotStatus] = useState<{ enabled: boolean; canEnable: boolean; botCount: number } | null>(null)
   const toast = useToast()
   const { play } = useSound()
+  const activeRoomChecked = useRef(false)
 
   const ws = useWebSocket(appConfig.ws.url)
 
-  // Check if user is already in an active room and redirect
+  // Check if user is already in an active room and redirect (runs once per address)
   useEffect(() => {
-    if (!address) return
+    if (!address || activeRoomChecked.current) return
+    activeRoomChecked.current = true
 
     const checkActiveRoom = async () => {
       try {
@@ -219,7 +221,8 @@ export default function LobbyPage() {
     ws.send('join_queue', {
       walletAddress: address,
       mode: 'REGULAR',
-      seatPrice: config.quickMatch.seatPrice
+      seatPrice: config.quickMatch.seatPrice,
+      wantsBots: botStatus?.enabled ?? false
     })
     toast.info('Searching for players...')
   }
@@ -404,7 +407,7 @@ export default function LobbyPage() {
                       </div>
                       <div className="text-left">
                         <span className="text-xs font-mono text-ember uppercase tracking-wider block">Test Bots</span>
-                        <span className="text-xs text-ash">{botStatus.botCount} bots will auto-fill games</span>
+                        <span className="text-xs text-ash">Bots will auto-fill the game</span>
                       </div>
                     </div>
                     <div className={`relative w-11 h-6 rounded-full transition-colors ${botStatus.enabled ? 'bg-alive' : 'bg-gunmetal'}`}>

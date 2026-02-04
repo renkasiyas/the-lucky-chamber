@@ -154,6 +154,7 @@ export interface JoinQueuePayload {
   mode: GameMode
   seatPrice?: number // Only for REGULAR mode
   walletAddress: string
+  wantsBots?: boolean // Whether user wants bots to fill their game
 }
 
 export interface LeaveQueuePayload {

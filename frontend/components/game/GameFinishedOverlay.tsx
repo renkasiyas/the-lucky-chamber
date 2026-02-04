@@ -86,14 +86,16 @@ export function GameFinishedOverlay({
   }, []) // Only run once on mount - iAmSurvivor won't change
 
   // Button handlers with explicit touch support for WebView
+  // Use setTimeout to delay DOM changes, allowing touch events to complete
+  // This prevents iOS/Safari from getting confused when the overlay unmounts mid-touch
   const handleDismiss = () => {
     playSound('click')
-    onDismiss()
+    setTimeout(() => onDismiss(), 0)
   }
 
   const handlePlayAgain = () => {
     playSound('click')
-    onPlayAgain()
+    setTimeout(() => onPlayAgain(), 0)
   }
 
   const handleVerify = () => {

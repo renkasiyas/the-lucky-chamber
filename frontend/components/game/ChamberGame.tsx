@@ -467,7 +467,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SPECTATOR SEQUENCE - Watch someone else's turn
-  // Flow: spin → cock → pulling → suspense → reveal
+  // Flow: (spin if not recently spun) → cock → pulling → suspense → reveal
   // ═══════════════════════════════════════════════════════════════════════════
   const runSpectatorSequence = useCallback((died: boolean, shooterSeat: number, roundIndex: number) => {
     // Guard against duplicate calls (network retries, etc.)
@@ -488,9 +488,8 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
     const shooterPaymentPosition = seatIndexToPaymentPosition.get(shooterSeat) ?? 0
     rotateHammerToSeatRef.current(shooterPaymentPosition)
 
-    // Phase 1: Spin barrel (turn is starting)
-    setPhase('spin')
-    spinBarrel(TIMING.spinDuration, TIMING.spinRotations, () => {
+    // Helper to continue with cock/pull sequence after spin (or immediately if skipped)
+    const continueWithCockAndPull = () => {
       // Phase 2: Cock sound announces pull is ready, then pulling animation
       play('cock')
       setPhase('pulling')
@@ -505,7 +504,18 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
       schedule(() => {
         revealOutcome(died, shooterSeat, false, roundIndex) // false = not my reveal (spectating)
       }, TIMING.cockDuration)
-    })
+    }
+
+    // Skip spin if barrel was recently spun (after previous player's click survival respin)
+    if (recentlySpun.current) {
+      recentlySpun.current = false
+      continueWithCockAndPull()
+      return
+    }
+
+    // Phase 1: Spin barrel (turn is starting)
+    setPhase('spin')
+    spinBarrel(TIMING.spinDuration, TIMING.spinRotations, continueWithCockAndPull)
   }, [clearTimeouts, stopAll, spinBarrel, play, hammerControls, schedule, revealOutcome, seatIndexToPaymentPosition])
 
   // ═══════════════════════════════════════════════════════════════════════════

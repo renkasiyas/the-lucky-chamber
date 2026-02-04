@@ -309,7 +309,7 @@ export class WSServer {
   }
 
   private handleJoinQueue(ws: WebSocket, payload: JoinQueuePayload): void {
-    const { mode, seatPrice, walletAddress } = payload
+    const { mode, seatPrice, walletAddress, wantsBots } = payload
     const client = this.clients.get(ws)
     if (!client) return
 
@@ -320,11 +320,16 @@ export class WSServer {
     }
 
     client.walletAddress = walletAddress
-    queueManager.joinQueue(walletAddress, mode, seatPrice)
 
-    // Add bots to fill the queue if bot manager is enabled
+    // Check if bot manager is enabled and user wants bots
     const botManager = (global as any).botManager
-    if (botManager?.enabled && seatPrice) {
+    const shouldAddBots = !!(wantsBots && botManager?.enabled)
+
+    queueManager.joinQueue(walletAddress, mode, seatPrice, shouldAddBots)
+
+    // If user wants bots and bot manager is enabled, add bots to queue
+    // They'll be matched with this user since both have wantsBots=true
+    if (shouldAddBots && seatPrice) {
       botManager.addBotsToQueue(mode, seatPrice)
     }
 

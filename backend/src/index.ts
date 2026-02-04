@@ -90,14 +90,16 @@ async function main() {
   }
 
   // Wire up queue manager callbacks
-  queueManager.setRoomCreatedCallback((roomId, playerAddresses) => {
+  queueManager.setRoomCreatedCallback((roomId, playerAddresses, addBots) => {
     // Notify connected WebSocket clients about room assignment
     wsServer.handleRoomCreatedFromQueue(roomId, playerAddresses)
 
-    // Notify bot manager to make deposits
-    botManager.handleRoomCreated(roomId, playerAddresses).catch(err => {
-      logger.error('Bot manager room created handler failed', { error: err?.message || String(err) })
-    })
+    // Only notify bot manager if this room should have bots
+    if (addBots) {
+      botManager.handleRoomCreated(roomId, playerAddresses).catch(err => {
+        logger.error('Bot manager room created handler failed', { error: err?.message || String(err) })
+      })
+    }
   })
 
   queueManager.setQueueUpdateCallback((queueKey, count) => {

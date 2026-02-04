@@ -11,10 +11,11 @@ interface QueueEntry {
   mode: GameMode
   seatPrice: number
   joinedAt: number
+  wantsBots: boolean // Whether this user wants bots to fill their game
 }
 
 // Callback type for when a room is created from the queue
-export type RoomCreatedCallback = (roomId: string, playerAddresses: string[]) => void
+export type RoomCreatedCallback = (roomId: string, playerAddresses: string[], addBots: boolean) => void
 
 // Callback type for when queue status changes
 export type QueueUpdateCallback = (queueKey: string, count: number) => void
@@ -61,7 +62,7 @@ export class QueueManager {
   /**
    * Join quick-match queue
    */
-  joinQueue(walletAddress: string, mode: GameMode, seatPrice?: number): string {
+  joinQueue(walletAddress: string, mode: GameMode, seatPrice?: number, wantsBots: boolean = false): string {
     // Check if user is already in an active room (bots are exempt)
     const botManager = (global as any).botManager
     const isBot = botManager?.isBot?.(walletAddress) ?? false
@@ -99,12 +100,13 @@ export class QueueManager {
       mode,
       seatPrice: price,
       joinedAt: Date.now(),
+      wantsBots: isBot ? true : wantsBots, // Bots always want to be with bots
     }
 
     queue.push(entry)
     this.queues.set(queueKey, queue)
 
-    logger.info(`User joined queue`, { walletAddress, queueKey, waitingCount: queue.length })
+    logger.info(`User joined queue`, { walletAddress, queueKey, waitingCount: queue.length, wantsBots: entry.wantsBots })
 
     // Emit queue update
     this.emitQueueUpdate(queueKey)
@@ -137,6 +139,8 @@ export class QueueManager {
 
   /**
    * Try to create a room if enough players in queue
+   * Matches users by bot preference - users who want bots play together,
+   * users who don't want bots play together
    */
   private tryCreateRoom(queueKey: string): void {
     if (this.creatingRoom.has(queueKey)) return  // Already creating
@@ -154,68 +158,102 @@ export class QueueManager {
       const config = getGameConfig()
       const minPlayers = config.quickMatch?.minPlayers || 2
 
-      // Check if we have enough players to start a match
-      if (queue.length >= minPlayers) {
-        logger.info('Creating room from queue', { queueKey, queueLength: queue.length, minPlayers })
+      // Separate users by bot preference
+      const wantBotsUsers = queue.filter(e => e.wantsBots)
+      const noBotUsers = queue.filter(e => !e.wantsBots)
 
-        // Take the minimum number of players for a match
-        const players = queue.splice(0, minPlayers)
-        this.queues.set(queueKey, queue)
-
-        // Shuffle players before adding to room for random seat assignment
-        // This ensures seat indices are distributed randomly, not by queue order
-        for (let i = players.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1))
-          ;[players[i], players[j]] = [players[j], players[i]]
-        }
-
-        // Create room
-        let room
-        try {
-          room = roomManager.createRoom(mode, mode === GameMode.REGULAR ? seatPrice : undefined)
-        } catch (err: any) {
-          logger.error('Failed to create room from queue', { queueKey, error: err?.message || String(err) })
-          // Return players to queue
-          const currentQueue = this.queues.get(queueKey) || []
-          this.queues.set(queueKey, [...players, ...currentQueue])
-          return
-        }
-
-        // Add all players to room, track failures
-        const failedPlayers: typeof players = []
-        players.forEach((player) => {
-          try {
-            roomManager.joinRoom(room.id, player.walletAddress)
-          } catch (err) {
-            logger.error(`Failed to add player to auto-created room`, { err, walletAddress: player.walletAddress, roomId: room.id })
-            failedPlayers.push(player)
-          }
-        })
-
-        // Return failed players to queue so they can try again
-        if (failedPlayers.length > 0) {
-          const currentQueue = this.queues.get(queueKey) || []
-          this.queues.set(queueKey, [...failedPlayers, ...currentQueue])
-          logger.warn(`Returned ${failedPlayers.length} players to queue after join failure`, { queueKey })
-        }
-
-        // Get successful players
-        const successfulPlayers = players.filter(p => !failedPlayers.includes(p))
-        const successfulAddresses = successfulPlayers.map(p => p.walletAddress)
-
-        logger.info(`Auto-created room from queue`, { roomId: room.id, queueKey, playerCount: successfulAddresses.length })
-
-        // Notify about room creation
-        if (this.onRoomCreated && successfulAddresses.length > 0) {
-          this.onRoomCreated(room.id, successfulAddresses)
-        }
-
-        // Emit queue update after room creation
-        this.emitQueueUpdate(queueKey)
+      // Try to match users who want bots first (they get priority since bots fill instantly)
+      if (wantBotsUsers.length >= minPlayers) {
+        this.createRoomForPlayers(queueKey, queue, wantBotsUsers.slice(0, minPlayers), mode, seatPrice, true)
+        return
       }
+
+      // Then try to match users who don't want bots
+      if (noBotUsers.length >= minPlayers) {
+        this.createRoomForPlayers(queueKey, queue, noBotUsers.slice(0, minPlayers), mode, seatPrice, false)
+        return
+      }
+
+      // Not enough players with matching preferences yet
+      logger.debug('Not enough players with matching bot preferences', {
+        queueKey,
+        wantBotsCount: wantBotsUsers.length,
+        noBotCount: noBotUsers.length,
+        minPlayers
+      })
     } finally {
       this.creatingRoom.delete(queueKey)
     }
+  }
+
+  /**
+   * Create a room for a group of players
+   */
+  private createRoomForPlayers(
+    queueKey: string,
+    queue: QueueEntry[],
+    players: QueueEntry[],
+    mode: GameMode,
+    seatPrice: number,
+    addBots: boolean
+  ): void {
+    logger.info('Creating room from queue', { queueKey, playerCount: players.length, addBots })
+
+    // Remove selected players from queue
+    const playerAddresses = new Set(players.map(p => p.walletAddress))
+    const remainingQueue = queue.filter(e => !playerAddresses.has(e.walletAddress))
+    this.queues.set(queueKey, remainingQueue)
+
+    // Shuffle players before adding to room for random seat assignment
+    const shuffledPlayers = [...players]
+    for (let i = shuffledPlayers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[shuffledPlayers[i], shuffledPlayers[j]] = [shuffledPlayers[j], shuffledPlayers[i]]
+    }
+
+    // Create room
+    let room
+    try {
+      room = roomManager.createRoom(mode, mode === GameMode.REGULAR ? seatPrice : undefined)
+    } catch (err: any) {
+      logger.error('Failed to create room from queue', { queueKey, error: err?.message || String(err) })
+      // Return players to queue
+      const currentQueue = this.queues.get(queueKey) || []
+      this.queues.set(queueKey, [...shuffledPlayers, ...currentQueue])
+      return
+    }
+
+    // Add all players to room, track failures
+    const failedPlayers: QueueEntry[] = []
+    shuffledPlayers.forEach((player) => {
+      try {
+        roomManager.joinRoom(room.id, player.walletAddress)
+      } catch (err) {
+        logger.error(`Failed to add player to auto-created room`, { err, walletAddress: player.walletAddress, roomId: room.id })
+        failedPlayers.push(player)
+      }
+    })
+
+    // Return failed players to queue so they can try again
+    if (failedPlayers.length > 0) {
+      const currentQueue = this.queues.get(queueKey) || []
+      this.queues.set(queueKey, [...failedPlayers, ...currentQueue])
+      logger.warn(`Returned ${failedPlayers.length} players to queue after join failure`, { queueKey })
+    }
+
+    // Get successful players
+    const successfulPlayers = shuffledPlayers.filter(p => !failedPlayers.includes(p))
+    const successfulAddresses = successfulPlayers.map(p => p.walletAddress)
+
+    logger.info(`Auto-created room from queue`, { roomId: room.id, queueKey, playerCount: successfulAddresses.length, addBots })
+
+    // Notify about room creation (bot manager will add bots if addBots is true)
+    if (this.onRoomCreated && successfulAddresses.length > 0) {
+      this.onRoomCreated(room.id, successfulAddresses, addBots)
+    }
+
+    // Emit queue update after room creation
+    this.emitQueueUpdate(queueKey)
   }
 
   /**
