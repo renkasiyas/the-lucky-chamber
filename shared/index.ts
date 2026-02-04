@@ -114,6 +114,7 @@ export const WSEvent = {
   JOIN_QUEUE: 'join_queue',
   LEAVE_QUEUE: 'leave_queue',
   SUBMIT_CLIENT_SEED: 'submit_client_seed',
+  READY_FOR_TURN: 'ready_for_turn', // Client signals animations done, ready for turn timer
   PULL_TRIGGER: 'pull_trigger',
   CONFIRM_RESULTS_SHOWN: 'confirm_results_shown', // Client signals victory modal is displayed
 
@@ -157,6 +158,11 @@ export interface SubmitClientSeedPayload {
   walletAddress: string
   seatIndex: number
   clientSeed: string
+}
+
+export interface ReadyForTurnPayload {
+  roomId: string
+  walletAddress: string
 }
 
 export interface PullTriggerPayload {

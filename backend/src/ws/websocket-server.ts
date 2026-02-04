@@ -10,6 +10,7 @@ import {
   type JoinQueuePayload,
   type LeaveQueuePayload,
   type SubmitClientSeedPayload,
+  type ReadyForTurnPayload,
   type PullTriggerPayload,
   type ConfirmResultsShownPayload,
   type RoomUpdatePayload,
@@ -194,6 +195,10 @@ export class WSServer {
           this.handleSubmitClientSeed(ws, payload as SubmitClientSeedPayload)
           break
 
+        case WSEvent.READY_FOR_TURN:
+          this.handleReadyForTurn(ws, payload as ReadyForTurnPayload)
+          break
+
         case WSEvent.PULL_TRIGGER:
           this.handlePullTrigger(ws, payload as PullTriggerPayload)
           break
@@ -350,6 +355,24 @@ export class WSServer {
     roomManager.submitClientSeed(roomId, client.walletAddress, clientSeed)
 
     this.broadcastRoomUpdate(roomId)
+  }
+
+  private handleReadyForTurn(ws: WebSocket, payload: ReadyForTurnPayload): void {
+    const { roomId } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
+
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+
+    const result = roomManager.readyForTurn(roomId, client.walletAddress)
+
+    if (!result.success) {
+      this.sendError(ws, result.error || 'Failed to signal ready')
+    }
   }
 
   private handlePullTrigger(ws: WebSocket, payload: PullTriggerPayload): void {

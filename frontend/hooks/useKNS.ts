@@ -16,6 +16,9 @@ interface UseKNSReturn {
 // Cache for domain lookups to avoid repeated API calls
 const domainCache: Map<string, string | null> = new Map()
 
+// Export for testing - allows tests to clear the cache
+export const __clearDomainCache = () => domainCache.clear()
+
 export function useKNS(address: string | null): UseKNSReturn {
   const [domain, setDomain] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)

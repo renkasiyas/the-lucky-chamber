@@ -267,7 +267,7 @@ export class BotManager {
   }
 
   /**
-   * Handle turn start - bot auto-pull trigger
+   * Handle turn start - bot signals ready immediately, then auto-pulls trigger
    */
   handleTurnStart(roomId: string, walletAddress: string): void {
     if (!this.enabled) return
@@ -276,6 +276,12 @@ export class BotManager {
     if (!this.isBot(walletAddress)) return
 
     logger.debug('Bot turn detected', { roomId, walletAddress })
+
+    // Signal ready immediately (bots don't need animation time)
+    const readyResult = roomManager.readyForTurn(roomId, walletAddress)
+    if (!readyResult.success) {
+      logger.debug('Bot ready signal failed', { roomId, walletAddress, error: readyResult.error })
+    }
 
     // Auto-pull after a random delay (1-3 seconds) to feel more natural
     const delay = 1000 + Math.random() * 2000

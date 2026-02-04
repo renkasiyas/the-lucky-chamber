@@ -40,7 +40,8 @@ interface PendingGameState {
   chambers: boolean[]
   roundIndex: number
   currentShooterIndex: number
-  resolveWait?: () => void
+  resolveReady?: () => void // Resolves when player signals ready for turn
+  resolveWait?: () => void // Resolves when player pulls trigger
 }
 
 // Pending payout state - waits for frontend to confirm results are shown
@@ -120,6 +121,35 @@ export class RoomManager {
     // Trigger the waiting game loop to continue
     if (pending.resolveWait) {
       pending.resolveWait()
+    }
+
+    return { success: true }
+  }
+
+  /**
+   * Handle ready_for_turn signal from a player
+   * This signals the backend to start the 30-second pull timer
+   */
+  readyForTurn(roomId: string, walletAddress: string): { success: boolean; error?: string } {
+    const pending = this.pendingGames.get(roomId)
+    if (!pending) {
+      return { success: false, error: 'No pending game for this room' }
+    }
+
+    const room = store.getRoom(roomId)
+    if (!room) {
+      return { success: false, error: 'Room not found' }
+    }
+
+    // Check if it's this player's turn
+    const currentShooter = room.seats.find(s => s.index === pending.currentShooterIndex)
+    if (!currentShooter || currentShooter.walletAddress !== walletAddress) {
+      return { success: false, error: 'Not your turn' }
+    }
+
+    // Signal that player is ready - starts the pull timer
+    if (pending.resolveReady) {
+      pending.resolveReady()
     }
 
     return { success: true }
@@ -702,9 +732,33 @@ export class RoomManager {
         this.onTurnStart(roomId, shooter.walletAddress)
       }
 
-      logRoomEvent('Waiting for trigger pull', roomId, { seatIndex: shooterSeatIndex, roundIndex })
+      logRoomEvent('Waiting for player ready signal', roomId, { seatIndex: shooterSeatIndex, roundIndex })
 
-      // Wait for player to pull trigger (with timeout)
+      // STEP 1: Wait for player to signal they're ready (animations complete)
+      // This allows frontend to finish animating previous rounds before timer starts
+      const readyTimeout = 60000 // 60 seconds for animations to complete
+      let playerReady = false
+
+      try {
+        playerReady = await Promise.race([
+          new Promise<boolean>((resolve) => {
+            pendingState.resolveReady = () => resolve(true)
+          }),
+          new Promise<boolean>((resolve) => {
+            setTimeout(() => resolve(false), readyTimeout)
+          }),
+        ])
+      } catch (error) {
+        logger.error('Error waiting for ready signal', { roomId, error })
+      }
+
+      if (!playerReady) {
+        logRoomEvent('Ready signal timeout, starting timer anyway', roomId, { seatIndex: shooterSeatIndex })
+      } else {
+        logRoomEvent('Player ready, starting pull timer', roomId, { seatIndex: shooterSeatIndex })
+      }
+
+      // STEP 2: Wait for player to pull trigger (with timeout)
       const pullTimeout = 30000 // 30 seconds to pull trigger
       let triggerPulled = false
 

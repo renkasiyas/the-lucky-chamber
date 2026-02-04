@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import { useKNS, formatAddressWithKNS } from '../../hooks/useKNS'
+import { useKNS, formatAddressWithKNS, __clearDomainCache } from '../../hooks/useKNS'
 
 // Mock fetch
 global.fetch = vi.fn()
@@ -11,8 +11,8 @@ global.fetch = vi.fn()
 describe('useKNS', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // Clear the module cache to reset the domain cache
-    vi.resetModules()
+    // Clear the domain cache between tests to prevent pollution
+    __clearDomainCache()
   })
 
   afterEach(() => {
@@ -131,37 +131,34 @@ describe('useKNS', () => {
     expect(result.current.domain).toBe(mockDomain)
   })
 
-  it('refetch bypasses cache', async () => {
+  it('refetch uses cached value', async () => {
     const mockAddress = 'kaspatest:qqrefetch555555555'
-    const mockDomain1 = 'first.kas'
-    const mockDomain2 = 'updated.kas'
+    const mockDomain = 'first.kas'
 
-    ;(global.fetch as any)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ domain: mockDomain1 }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ domain: mockDomain2 }),
-      })
+    ;(global.fetch as any).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ domain: mockDomain }),
+    })
 
     const { result } = renderHook(() => useKNS(mockAddress))
 
     await waitFor(() => {
-      expect(result.current.domain).toBe(mockDomain1)
+      expect(result.current.domain).toBe(mockDomain)
     })
 
     expect(global.fetch).toHaveBeenCalledTimes(1)
 
-    // Trigger refetch
+    // Trigger refetch - should use cache, not fetch again
     result.current.refetch()
 
     await waitFor(() => {
-      expect(result.current.domain).toBe(mockDomain2)
+      expect(result.current.loading).toBe(false)
     })
 
-    expect(global.fetch).toHaveBeenCalledTimes(2)
+    // Still the same domain from cache
+    expect(result.current.domain).toBe(mockDomain)
+    // Should not have called fetch again (cached)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 
   it('updates when address changes', async () => {

@@ -13,6 +13,7 @@ interface ChamberGameProps {
   currentRound: number
   myAddress: string | null
   onPullTrigger?: () => void
+  onReadyForTurn?: () => void // Called when ready for turn (animations done, signals backend to start timer)
   onFinalDeathAnimationComplete?: () => void // Called when the final death animation (game-ending) completes
   onRoundRevealed?: (roundIndex: number) => void // Called when a round's outcome is visually revealed (for Game Log sync)
 }
@@ -62,7 +63,7 @@ const TIMING = {
   respinRotations: 2,
 } as const
 
-export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFinalDeathAnimationComplete, onRoundRevealed }: ChamberGameProps) {
+export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onReadyForTurn, onFinalDeathAnimationComplete, onRoundRevealed }: ChamberGameProps) {
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
   // ═══════════════════════════════════════════════════════════════════════════
@@ -302,6 +303,8 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       setPhase('ready')
       setCountdown(30)
       play('cock') // Announce: pull trigger is now available
+      // Signal backend to start the 30-second timer
+      onReadyForTurn?.()
       return
     }
 
@@ -315,8 +318,10 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onFi
       setPhase('ready')
       setCountdown(30)
       play('cock') // Announce: pull trigger is now available
+      // Signal backend to start the 30-second timer
+      onReadyForTurn?.()
     })
-  }, [clearTimeouts, stopAll, spinBarrel, play, serverShooterPaymentPosition])
+  }, [clearTimeouts, stopAll, spinBarrel, play, serverShooterPaymentPosition, serverShooterIndex, onReadyForTurn])
 
   // Keep ref in sync for stable reference in useEffects
   startMyTurnRef.current = startMyTurn

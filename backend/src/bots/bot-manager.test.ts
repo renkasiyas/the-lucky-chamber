@@ -28,6 +28,7 @@ vi.mock('../crypto/wallet.js', () => ({
 vi.mock('../game/room-manager.js', () => ({
   roomManager: {
     getRoom: vi.fn().mockReturnValue(null),
+    readyForTurn: vi.fn().mockReturnValue({ success: true }),
     pullTrigger: vi.fn().mockReturnValue({ success: true }),
   },
 }))

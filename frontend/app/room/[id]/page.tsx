@@ -304,6 +304,13 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     ws.send('pull_trigger', { roomId: room.id, walletAddress: address })
   }, [address, room, ws])
 
+  // Called when ChamberGame is ready for turn (animations complete)
+  // This signals backend to start the 30-second pull timer
+  const handleReadyForTurn = useCallback(() => {
+    if (!address || !room) return
+    ws.send('ready_for_turn', { roomId: room.id, walletAddress: address })
+  }, [address, room, ws])
+
   // Called when GameFinishedOverlay is shown - signals backend to send payout
   const handleResultsShown = useCallback(() => {
     if (!address || !room) return
@@ -786,6 +793,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                 currentRound={room.rounds.length}
                 myAddress={address}
                 onPullTrigger={handlePullTrigger}
+                onReadyForTurn={handleReadyForTurn}
                 onFinalDeathAnimationComplete={handleDeathAnimationComplete}
                 onRoundRevealed={handleRoundRevealed}
               />
