@@ -68,6 +68,9 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   // Revealed rounds - only add rounds to Game Log when animation reveals them
   // Prevents spoilers where all results show immediately before animations play
   const [revealedRounds, setRevealedRounds] = useState<Set<number>>(new Set())
+  // Server-driven timer state for countdown sync
+  const [timerDeadline, setTimerDeadline] = useState<number | null>(null)
+  const [timerTurnId, setTimerTurnId] = useState<number | null>(null)
   const prevRoomStateRef = useRef<string | null>(null)
   const lockStartTimeRef = useRef<number | null>(null)
   const hasJoinedRef = useRef(false)
@@ -160,7 +163,18 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     const unsubTurnStart = ws.subscribe('turn:start', (payload: { roomId: string; seatIndex: number; walletAddress: string | null }) => {
       if (payload.roomId === roomId) {
+        // Reset timer when new turn starts (timer will be set by turn:timer_start)
+        setTimerDeadline(null)
+        setTimerTurnId(null)
         fetchRoomRef.current()
+      }
+    })
+
+    const unsubTurnTimerStart = ws.subscribe('turn:timer_start', (payload: { roomId: string; turnId: number; deadline: number; timeoutMs: number }) => {
+      if (payload.roomId === roomId) {
+        // Server is starting the pull timer - sync countdown with server
+        setTimerDeadline(payload.deadline)
+        setTimerTurnId(payload.turnId)
       }
     })
 
@@ -185,6 +199,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       unsubGameEnd()
       unsubRngReveal()
       unsubTurnStart()
+      unsubTurnTimerStart()
       unsubPlayerForfeit()
       unsubPayoutSent()
     }
@@ -796,6 +811,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
                 onReadyForTurn={handleReadyForTurn}
                 onFinalDeathAnimationComplete={handleDeathAnimationComplete}
                 onRoundRevealed={handleRoundRevealed}
+                serverTimerDeadline={timerDeadline}
               />
             </CardContent>
           </Card>

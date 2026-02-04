@@ -150,8 +150,17 @@ export class WSServer {
               logger.info('Player disconnected during FUNDING, keeping seat', { walletAddress: client.walletAddress, roomId })
             } else if (room.state === 'PLAYING') {
               // PLAYING: do NOT forfeit on disconnect - player may be refreshing
-              // The 30s turn timeout handles AFK players naturally
-              logger.info('Player disconnected during PLAYING, keeping seat (may reconnect)', { walletAddress: client.walletAddress, roomId })
+              // BUT if it's their turn, signal ready to avoid stalling the room
+              // (they'll still have 30s to reconnect and pull)
+              const currentShooter = roomManager.getCurrentShooter(roomId)
+              if (currentShooter && client.walletAddress && currentShooter.walletAddress === client.walletAddress) {
+                // It's this player's turn - signal ready to start the timer
+                // This prevents the room from stalling if they don't reconnect
+                roomManager.readyForTurn(roomId, client.walletAddress)
+                logger.info('Player disconnected during their turn, signaling ready to start timer', { walletAddress: client.walletAddress, roomId })
+              } else {
+                logger.info('Player disconnected during PLAYING, keeping seat (may reconnect)', { walletAddress: client.walletAddress, roomId })
+              }
             }
           } catch (err) {
             logger.debug('Could not handle disconnected player', { walletAddress: client.walletAddress, roomId, error: err })
@@ -358,7 +367,7 @@ export class WSServer {
   }
 
   private handleReadyForTurn(ws: WebSocket, payload: ReadyForTurnPayload): void {
-    const { roomId } = payload
+    const { roomId, turnId } = payload
     const client = this.clients.get(ws)
     if (!client) return
 
@@ -368,7 +377,7 @@ export class WSServer {
       return
     }
 
-    const result = roomManager.readyForTurn(roomId, client.walletAddress)
+    const result = roomManager.readyForTurn(roomId, client.walletAddress, turnId)
 
     if (!result.success) {
       this.sendError(ws, result.error || 'Failed to signal ready')

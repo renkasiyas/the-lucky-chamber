@@ -122,6 +122,7 @@ export const WSEvent = {
   ROOM_UPDATE: 'room:update',
   GAME_START: 'game:start',
   TURN_START: 'turn:start',
+  TURN_TIMER_START: 'turn:timer_start', // Server signals pull timer started (for countdown sync)
   ROUND_RESULT: 'round:result',
   GAME_END: 'game:end',
   PAYOUT_SENT: 'payout:sent', // Server signals payout transaction was sent
@@ -163,6 +164,7 @@ export interface SubmitClientSeedPayload {
 export interface ReadyForTurnPayload {
   roomId: string
   walletAddress: string
+  turnId?: number // Optional: validates signal is for current turn (prevents stale events)
 }
 
 export interface PullTriggerPayload {
@@ -180,6 +182,13 @@ export interface TurnStartPayload {
   seatIndex: number
   walletAddress: string | null
   roundIndex: number
+}
+
+export interface TurnTimerStartPayload {
+  roomId: string
+  turnId: number // Monotonic counter per room, prevents stale events
+  deadline: number // Timestamp when timer expires (Date.now() + timeoutMs)
+  timeoutMs: number // Timeout duration in milliseconds
 }
 
 export interface RoomUpdatePayload {

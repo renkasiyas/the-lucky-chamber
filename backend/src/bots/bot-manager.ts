@@ -299,6 +299,13 @@ export class BotManager {
     const room = roomManager.getRoom(roomId)
     if (!room) return
 
+    // Re-verify it's still this bot's turn (turn may have advanced during delay)
+    const currentShooter = roomManager.getCurrentShooter(roomId)
+    if (!currentShooter || currentShooter.walletAddress !== walletAddress) {
+      logger.debug('Bot auto-pull skipped - no longer this bot\'s turn', { roomId, walletAddress })
+      return
+    }
+
     try {
       const result = roomManager.pullTrigger(roomId, walletAddress)
       if (result.success) {

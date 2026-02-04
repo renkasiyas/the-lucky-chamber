@@ -16,6 +16,7 @@ interface ChamberGameProps {
   onReadyForTurn?: () => void // Called when ready for turn (animations done, signals backend to start timer)
   onFinalDeathAnimationComplete?: () => void // Called when the final death animation (game-ending) completes
   onRoundRevealed?: (roundIndex: number) => void // Called when a round's outcome is visually revealed (for Game Log sync)
+  serverTimerDeadline?: number | null // Server-driven countdown deadline (from turn:timer_start event)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -63,7 +64,7 @@ const TIMING = {
   respinRotations: 2,
 } as const
 
-export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onReadyForTurn, onFinalDeathAnimationComplete, onRoundRevealed }: ChamberGameProps) {
+export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onReadyForTurn, onFinalDeathAnimationComplete, onRoundRevealed, serverTimerDeadline }: ChamberGameProps) {
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
   // ═══════════════════════════════════════════════════════════════════════════
@@ -606,24 +607,35 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
   }, [phase, activelyMyTurn, room.state, room.rounds, serverShooterIndex, serverShooterPaymentPosition])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // COUNTDOWN (only during ready phase)
+  // COUNTDOWN (only during ready phase) - sync with server deadline when available
   // ═══════════════════════════════════════════════════════════════════════════
+  const lastCountdownRef = useRef<number>(30) // Track last countdown for sound trigger
+
   useEffect(() => {
     if (phase !== 'ready') return
     if (room.state !== 'PLAYING') return
 
     const timer = setInterval(() => {
-      setCountdown(prev => {
-        if (prev <= 1) return 0
-        if (prev <= 10) {
-          play('countdown', { volume: 0.4 })
-        }
-        return prev - 1
-      })
+      let newCountdown: number
+
+      if (serverTimerDeadline) {
+        // Calculate countdown from server deadline for accurate sync
+        newCountdown = Math.max(0, Math.ceil((serverTimerDeadline - Date.now()) / 1000))
+      } else {
+        // Fallback to local decrement if no server deadline
+        newCountdown = Math.max(0, countdown - 1)
+      }
+
+      // Play countdown sound when crossing into <=10 territory
+      if (newCountdown <= 10 && newCountdown > 0 && newCountdown !== lastCountdownRef.current) {
+        play('countdown', { volume: 0.4 })
+      }
+      lastCountdownRef.current = newCountdown
+      setCountdown(newCountdown)
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [phase, room.state, play])
+  }, [phase, room.state, play, serverTimerDeadline, countdown])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // INITIALIZE/SYNC DEATH STATE (for page refresh when already dead)

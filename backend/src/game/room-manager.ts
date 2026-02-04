@@ -14,6 +14,7 @@ import {
   type GameEndPayload,
   type PayoutSentPayload,
   type RNGRevealPayload,
+  type TurnTimerStartPayload,
   SOMPI_PER_KAS,
 } from '../../../shared/index.js'
 import { store } from '../db/store.js'
@@ -21,7 +22,7 @@ import { walletManager } from '../crypto/wallet.js'
 import { RNGSystem } from '../crypto/rng.js'
 import { kaspaClient } from '../crypto/kaspa-client.js'
 import { knsClient } from '../crypto/kns-client.js'
-import { config } from '../config.js'
+import { config, gameTimings } from '../config.js'
 import type { WSServer } from '../ws/websocket-server.js'
 import { logger, logRoomEvent, logUserAction } from '../utils/logger.js'
 
@@ -40,6 +41,8 @@ interface PendingGameState {
   chambers: boolean[]
   roundIndex: number
   currentShooterIndex: number
+  turnId: number // Monotonic counter per turn, prevents stale events from previous turns
+  readyReceived: boolean // Flag set if ready_for_turn arrives before resolver is installed
   resolveReady?: () => void // Resolves when player signals ready for turn
   resolveWait?: () => void // Resolves when player pulls trigger
 }
@@ -121,6 +124,7 @@ export class RoomManager {
     // Trigger the waiting game loop to continue
     if (pending.resolveWait) {
       pending.resolveWait()
+      pending.resolveWait = undefined // Clear to prevent reuse
     }
 
     return { success: true }
@@ -130,10 +134,15 @@ export class RoomManager {
    * Handle ready_for_turn signal from a player
    * This signals the backend to start the 30-second pull timer
    */
-  readyForTurn(roomId: string, walletAddress: string): { success: boolean; error?: string } {
+  readyForTurn(roomId: string, walletAddress: string, turnId?: number): { success: boolean; error?: string } {
     const pending = this.pendingGames.get(roomId)
     if (!pending) {
       return { success: false, error: 'No pending game for this room' }
+    }
+
+    // If turnId provided, validate it matches current turn (prevents stale events)
+    if (turnId !== undefined && turnId !== pending.turnId) {
+      return { success: false, error: 'Stale turn ID' }
     }
 
     const room = store.getRoom(roomId)
@@ -147,9 +156,13 @@ export class RoomManager {
       return { success: false, error: 'Not your turn' }
     }
 
+    // Mark ready received - handles race condition where signal arrives before resolver
+    pending.readyReceived = true
+
     // Signal that player is ready - starts the pull timer
     if (pending.resolveReady) {
       pending.resolveReady()
+      pending.resolveReady = undefined // Clear to prevent reuse
     }
 
     return { success: true }
@@ -655,6 +668,8 @@ export class RoomManager {
 
     // Track previous shooter's seat.index for proper rotation after deaths
     let lastShooterSeatIndex: number | null = null
+    // Monotonic turn counter to prevent stale events from previous turns
+    let turnId = 0
 
     while (true) {
       const aliveCount = room.seats.filter((s) => s.alive).length
@@ -703,6 +718,7 @@ export class RoomManager {
       lastShooterSeatIndex = shooterSeatIndex
 
       // Store pending game state for trigger pull
+      const currentTurnId = ++turnId
       const pendingState: PendingGameState = {
         roomId,
         blockHash,
@@ -711,6 +727,8 @@ export class RoomManager {
         chambers,
         roundIndex,
         currentShooterIndex: shooterSeatIndex,
+        turnId: currentTurnId,
+        readyReceived: false, // Will be set true if ready signal arrives early
       }
       this.pendingGames.set(roomId, pendingState)
 
@@ -732,24 +750,30 @@ export class RoomManager {
         this.onTurnStart(roomId, shooter.walletAddress)
       }
 
-      logRoomEvent('Waiting for player ready signal', roomId, { seatIndex: shooterSeatIndex, roundIndex })
+      logRoomEvent('Waiting for player ready signal', roomId, { seatIndex: shooterSeatIndex, roundIndex, turnId: currentTurnId })
 
       // STEP 1: Wait for player to signal they're ready (animations complete)
       // This allows frontend to finish animating previous rounds before timer starts
-      const readyTimeout = 60000 // 60 seconds for animations to complete
-      let playerReady = false
+      const { readyTimeoutMs, pullTimeoutMs } = gameTimings
+      let playerReady = pendingState.readyReceived // Check if ready signal arrived early
 
-      try {
-        playerReady = await Promise.race([
-          new Promise<boolean>((resolve) => {
-            pendingState.resolveReady = () => resolve(true)
-          }),
-          new Promise<boolean>((resolve) => {
-            setTimeout(() => resolve(false), readyTimeout)
-          }),
-        ])
-      } catch (error) {
-        logger.error('Error waiting for ready signal', { roomId, error })
+      if (!playerReady) {
+        try {
+          playerReady = await Promise.race([
+            new Promise<boolean>((resolve) => {
+              pendingState.resolveReady = () => resolve(true)
+              // Check again after installing resolver (race condition window)
+              if (pendingState.readyReceived) resolve(true)
+            }),
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), readyTimeoutMs)
+            }),
+          ])
+        } catch (error) {
+          logger.error('Error waiting for ready signal', { roomId, error })
+        }
+        // Clear resolver after use
+        pendingState.resolveReady = undefined
       }
 
       if (!playerReady) {
@@ -758,8 +782,19 @@ export class RoomManager {
         logRoomEvent('Player ready, starting pull timer', roomId, { seatIndex: shooterSeatIndex })
       }
 
+      // Broadcast TURN_TIMER_START so frontend can sync countdown with server
+      const timerDeadline = Date.now() + pullTimeoutMs
+      if (this.wsServer) {
+        const timerPayload: TurnTimerStartPayload = {
+          roomId,
+          turnId: currentTurnId,
+          deadline: timerDeadline,
+          timeoutMs: pullTimeoutMs,
+        }
+        this.wsServer.broadcastToRoom(roomId, WSEvent.TURN_TIMER_START, timerPayload)
+      }
+
       // STEP 2: Wait for player to pull trigger (with timeout)
-      const pullTimeout = 30000 // 30 seconds to pull trigger
       let triggerPulled = false
 
       try {
@@ -768,12 +803,14 @@ export class RoomManager {
             pendingState.resolveWait = () => resolve(true)
           }),
           new Promise<boolean>((resolve) => {
-            setTimeout(() => resolve(false), pullTimeout)
+            setTimeout(() => resolve(false), pullTimeoutMs)
           }),
         ])
       } catch (error) {
         logger.error('Error waiting for trigger pull', { roomId, error })
       }
+      // Clear resolver after use
+      pendingState.resolveWait = undefined
 
       // If timeout or error, auto-pull for bots or afk players
       if (!triggerPulled) {
