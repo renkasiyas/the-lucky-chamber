@@ -58,6 +58,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [loading, setLoading] = useState(true)
   const [joining, setJoining] = useState(false)
   const [showGameFinished, setShowGameFinished] = useState(false)
+  const [gameResultsSeen, setGameResultsSeen] = useState(false) // Tracks if results were revealed (doesn't reset on modal close)
   const [depositFailed, setDepositFailed] = useState(false)
   const [depositSent, setDepositSent] = useState(false)
   const [retryingDeposit, setRetryingDeposit] = useState(false)
@@ -396,6 +397,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     if (pendingVictoryRef.current) {
       pendingVictoryRef.current = false
       setShowGameFinished(true)
+      setGameResultsSeen(true)
     }
   }, [room])
 
@@ -406,6 +408,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     // If we loaded the page when game was already SETTLED (refresh), show results immediately
     if (prevRoomStateRef.current === null && room.state === 'SETTLED') {
       setShowGameFinished(true)
+      setGameResultsSeen(true)
       prevRoomStateRef.current = room.state
       return
     }
@@ -431,6 +434,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     const fallbackTimeout = setTimeout(() => {
       if (pendingVictoryRef.current && !showGameFinished) {
         setShowGameFinished(true)
+        setGameResultsSeen(true)
         pendingVictoryRef.current = false
       }
     }, 60000) // 60 second safety net (allows all rounds to animate)

@@ -608,34 +608,42 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
 
   // ═══════════════════════════════════════════════════════════════════════════
   // COUNTDOWN (only during ready phase) - sync with server deadline when available
-  // ═══════════════════════════════════════════════════════════════════════════
-  const lastCountdownRef = useRef<number>(30) // Track last countdown for sound trigger
+  // ═══════════════════════════════════════════════════════════════
+
+  // Track server deadline in ref to avoid re-creating interval
+  const serverDeadlineRef = useRef<number | null>(null)
+  serverDeadlineRef.current = serverTimerDeadline ?? null
+
+  // Track last countdown for sound trigger
+  const lastCountdownRef = useRef<number>(30)
 
   useEffect(() => {
     if (phase !== 'ready') return
     if (room.state !== 'PLAYING') return
 
     const timer = setInterval(() => {
-      let newCountdown: number
+      setCountdown(prevCountdown => {
+        let newCountdown: number
 
-      if (serverTimerDeadline) {
-        // Calculate countdown from server deadline for accurate sync
-        newCountdown = Math.max(0, Math.ceil((serverTimerDeadline - Date.now()) / 1000))
-      } else {
-        // Fallback to local decrement if no server deadline
-        newCountdown = Math.max(0, countdown - 1)
-      }
+        if (serverDeadlineRef.current) {
+          // Calculate countdown from server deadline for accurate sync
+          newCountdown = Math.max(0, Math.ceil((serverDeadlineRef.current - Date.now()) / 1000))
+        } else {
+          // Fallback to local decrement if no server deadline
+          newCountdown = Math.max(0, prevCountdown - 1)
+        }
 
-      // Play countdown sound when crossing into <=10 territory
-      if (newCountdown <= 10 && newCountdown > 0 && newCountdown !== lastCountdownRef.current) {
-        play('countdown', { volume: 0.4 })
-      }
-      lastCountdownRef.current = newCountdown
-      setCountdown(newCountdown)
+        // Play countdown sound when crossing into <=10 territory
+        if (newCountdown <= 10 && newCountdown > 0 && newCountdown !== lastCountdownRef.current) {
+          play('countdown', { volume: 0.4 })
+        }
+        lastCountdownRef.current = newCountdown
+        return newCountdown
+      })
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [phase, room.state, play, serverTimerDeadline, countdown])
+  }, [phase, room.state, play])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // INITIALIZE/SYNC DEATH STATE (for page refresh when already dead)

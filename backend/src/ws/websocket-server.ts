@@ -156,8 +156,11 @@ export class WSServer {
               if (currentShooter && client.walletAddress && currentShooter.walletAddress === client.walletAddress) {
                 // It's this player's turn - signal ready to start the timer
                 // This prevents the room from stalling if they don't reconnect
-                roomManager.readyForTurn(roomId, client.walletAddress)
-                logger.info('Player disconnected during their turn, signaling ready to start timer', { walletAddress: client.walletAddress, roomId })
+                const turnId = roomManager.getCurrentTurnId(roomId)
+                if (turnId !== null) {
+                  roomManager.readyForTurn(roomId, client.walletAddress, turnId)
+                  logger.info('Player disconnected during their turn, signaling ready to start timer', { walletAddress: client.walletAddress, roomId, turnId })
+                }
               } else {
                 logger.info('Player disconnected during PLAYING, keeping seat (may reconnect)', { walletAddress: client.walletAddress, roomId })
               }

@@ -186,6 +186,15 @@ export class RoomManager {
   }
 
   /**
+   * Get the current turn ID for a room (for validating stale events)
+   */
+  getCurrentTurnId(roomId: string): number | null {
+    const pending = this.pendingGames.get(roomId)
+    if (!pending) return null
+    return pending.turnId
+  }
+
+  /**
    * Set WebSocket server instance for broadcasting events
    */
   setWSServer(ws: WSServer): void {
