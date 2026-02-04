@@ -103,18 +103,23 @@ export function ProvablyFairModal({
 
     setVerifyingRounds(true)
     try {
-      // Sort client seeds by seat index (matching backend)
-      const sortedSeeds = [...room.seats]
+      // Get client seeds and sort lexicographically (matching backend rng.ts)
+      const clientSeeds = room.seats
         .filter(s => s.clientSeed)
-        .sort((a, b) => a.index - b.index)
         .map(s => s.clientSeed!)
-        .join('')
+        .sort() // Lexicographic sort to match backend
 
       const results: RoundVerification[] = []
 
       for (const round of room.rounds) {
-        // Backend computes: HMAC_SHA256(serverSeed, sortedSeeds + roomId + roundIndex + blockHash)
-        const message = `${sortedSeeds}${room.id}${round.index}${room.settlementBlockHash}`
+        // Backend computes: HMAC_SHA256(serverSeed, [...sortedSeeds, roomId, roundIndex.toString(), blockHash].join('|'))
+        // Note: Backend uses '|' as delimiter between all parts
+        const message = [
+          ...clientSeeds,
+          room.id,
+          round.index.toString(),
+          room.settlementBlockHash,
+        ].join('|')
         const computedRandomness = await hmacSha256(room.serverSeed!, message)
 
         results.push({
@@ -472,16 +477,19 @@ export function ProvablyFairModal({
                   Verify the server commit matches SHA256 of the revealed server seed.
                 </li>
                 <li>
-                  Concatenate: server_seed + all client_seeds + room_id + round + block_hash
+                  Sort all client seeds lexicographically (alphabetically).
                 </li>
                 <li>
-                  Compute HMAC-SHA256 of the concatenated string.
+                  Create message: join [client_seeds..., room_id, round_index, block_hash] with &apos;|&apos; delimiter.
                 </li>
                 <li>
-                  The bullet position is: (first 4 bytes as uint32) % 6
+                  Compute HMAC-SHA256 using server_seed as key and message from step 3.
                 </li>
                 <li>
-                  If the shooter&apos;s position matches, the chamber fires.
+                  The bullet position is: (first 4 bytes as big-endian uint32) % 6
+                </li>
+                <li>
+                  If the shooter&apos;s seat index matches the bullet position, the chamber fires.
                 </li>
               </ol>
             </div>
