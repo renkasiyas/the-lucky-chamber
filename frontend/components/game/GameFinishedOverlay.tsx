@@ -175,6 +175,7 @@ export function GameFinishedOverlay({
         <button
           type="button"
           onClick={handleDismiss}
+          onTouchEnd={(e) => { e.preventDefault(); handleDismiss() }}
           className="fixed top-4 right-4 z-[200] p-4 min-w-[56px] min-h-[56px] bg-noir/80 text-ash hover:text-chalk hover:bg-noir active:bg-smoke rounded-full transition-colors"
           style={{ touchAction: 'manipulation', pointerEvents: 'auto' }}
         >
@@ -417,6 +418,7 @@ export function GameFinishedOverlay({
               <button
                 type="button"
                 onClick={handleDismiss}
+                onTouchEnd={(e) => { e.preventDefault(); handleDismiss() }}
                 className="flex-1 py-4 px-4 min-h-[56px] bg-smoke/50 border border-edge rounded-xl font-display text-sm tracking-wider text-ash active:bg-smoke transition-colors"
                 style={{ touchAction: 'manipulation' }}
               >
@@ -425,6 +427,7 @@ export function GameFinishedOverlay({
               <button
                 type="button"
                 onClick={handlePlayAgain}
+                onTouchEnd={(e) => { e.preventDefault(); handlePlayAgain() }}
                 className={`
                   flex-1 py-4 px-4 min-h-[56px] rounded-xl font-display text-sm tracking-wider text-void transition-colors
                   ${iAmSurvivor
@@ -440,6 +443,7 @@ export function GameFinishedOverlay({
             <button
               type="button"
               onClick={handleVerify}
+              onTouchEnd={(e) => { e.preventDefault(); handleVerify() }}
               className="w-full py-3 px-4 min-h-[52px] bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold active:bg-gold/20 transition-colors flex items-center justify-center gap-2"
               style={{ touchAction: 'manipulation' }}
             >

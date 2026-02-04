@@ -823,7 +823,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         )}
 
         {/* Keep ChamberGame mounted during SETTLED to let death animation complete */}
-        {(room.state === 'PLAYING' || (room.state === 'SETTLED' && !showGameFinished)) && (
+        {/* Once isUiSettled is true, we replace the barrel with the results table */}
+        {(room.state === 'PLAYING' || (room.state === 'SETTLED' && !isUiSettled)) && (
           <Card variant="danger" className="!bg-noir/80 border-blood/40">
             <CardContent className="!p-1 md:!p-6 !pt-2 md:!pt-6">
               <ChamberGame
