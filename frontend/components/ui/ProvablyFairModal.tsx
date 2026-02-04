@@ -33,7 +33,7 @@ export function ProvablyFairModal({
   room,
   isOpen,
   onClose,
-  explorerBaseUrl = process.env.NEXT_PUBLIC_EXPLORER_URL,
+  explorerBaseUrl = process.env.NEXT_PUBLIC_EXPLORER_URL || 'https://kaspa.stream',
 }: ProvablyFairModalProps) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null)
