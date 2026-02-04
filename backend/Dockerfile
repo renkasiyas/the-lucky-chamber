@@ -54,8 +54,9 @@ COPY --from=base /build/backend/config/ ./dist/backend/config/
 RUN mkdir -p /app/data
 
 ENV NODE_ENV=production
-ENV PORT=3001
+ENV PORT=4201
 
-EXPOSE 3001
+EXPOSE 4201
+EXPOSE 4202
 
 CMD ["node", "dist/backend/src/index.js"]

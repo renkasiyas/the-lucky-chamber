@@ -31,7 +31,7 @@ case "$ENV" in
         COMPOSE_FILES="-p ${PROJECT_NAME} -f docker-compose.local.yml"
         DOCKER_ENV="ENVIRONMENT=local"
         CONTAINER_NAME="${CONTAINER_PREFIX}_local"
-        HEALTH_PORT="3001"
+        HEALTH_PORT="4201"
         ENV_FILE="backend/.env.local"
         ;;
     dev)
@@ -39,7 +39,7 @@ case "$ENV" in
         COMPOSE_FILES="-p ${PROJECT_NAME} -f docker-compose.dev.yml"
         DOCKER_ENV="ENVIRONMENT=dev"
         CONTAINER_NAME="${CONTAINER_PREFIX}_dev"
-        HEALTH_PORT="3001"
+        HEALTH_PORT="4201"
         ENV_FILE="backend/.env.dev"
         ;;
     prod)
@@ -47,7 +47,7 @@ case "$ENV" in
         COMPOSE_FILES="-p ${PROJECT_NAME} -f docker-compose.prod.yml"
         DOCKER_ENV="ENVIRONMENT=prod"
         CONTAINER_NAME="${CONTAINER_PREFIX}_prod"
-        HEALTH_PORT="3001"
+        HEALTH_PORT="4201"
         ENV_FILE="backend/.env.prod"
         ;;
     *)

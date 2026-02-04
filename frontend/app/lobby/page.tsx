@@ -3,7 +3,7 @@
 
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useKasware } from '../../hooks/useKasware'
 import { useWebSocket } from '../../hooks/useWebSocket'
@@ -11,7 +11,7 @@ import { useSound } from '../../hooks/useSound'
 import { Button } from '../../components/ui/Button'
 import { Card, CardContent } from '../../components/ui/Card'
 import { useToast } from '../../components/ui/Toast'
-import { formatKAS, formatKASPrecise } from '../../lib/format'
+import { formatKAS, formatKASPrecise, calculatePayouts } from '../../lib/format'
 import appConfig from '../../lib/config'
 
 type LobbyTab = 'quickmatch' | 'custom'
@@ -52,8 +52,31 @@ export default function LobbyPage() {
   const [botStatus, setBotStatus] = useState<{ enabled: boolean; canEnable: boolean; botCount: number } | null>(null)
   const toast = useToast()
   const { play } = useSound()
+  const activeRoomChecked = useRef(false)
 
   const ws = useWebSocket(appConfig.ws.url)
+
+  // Check if user is already in an active room and redirect (runs once per address)
+  useEffect(() => {
+    if (!address || activeRoomChecked.current) return
+    activeRoomChecked.current = true
+
+    const checkActiveRoom = async () => {
+      try {
+        const response = await fetch(`${appConfig.api.baseUrl}/api/users/${address}/active-room`)
+        if (response.ok) {
+          const data = await response.json()
+          if (data.room) {
+            toast.info('Rejoining your active game...')
+            router.push(`/room/${data.room.id}`)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to check active room:', err)
+      }
+    }
+    checkActiveRoom()
+  }, [address, router, toast])
 
   // Fetch game config
   useEffect(() => {
@@ -198,7 +221,8 @@ export default function LobbyPage() {
     ws.send('join_queue', {
       walletAddress: address,
       mode: 'REGULAR',
-      seatPrice: config.quickMatch.seatPrice
+      seatPrice: config.quickMatch.seatPrice,
+      wantsBots: botStatus?.enabled ?? false
     })
     toast.info('Searching for players...')
   }
@@ -251,27 +275,27 @@ export default function LobbyPage() {
   const maxPrice = config?.customRoom.maxSeatPrice || 10000
 
   return (
-    <div className="min-h-screen bg-void pt-20 pb-8">
+    <div className="min-h-screen bg-void pt-14 md:pt-20 pb-4 md:pb-8">
       {/* Background effects */}
       <div className="fixed inset-0 bg-gradient-to-b from-void via-noir to-void pointer-events-none" />
       <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-gold/3 rounded-full blur-[150px] pointer-events-none" />
 
-      <div className="relative z-10 max-w-2xl mx-auto px-4 space-y-8">
-        {/* Header */}
+      <div className="relative z-10 max-w-2xl mx-auto px-3 md:px-4 space-y-4 md:space-y-8">
+        {/* Header - compact on mobile */}
         <div className="text-center animate-fade-in">
-          <h1 className="font-display text-4xl md:text-5xl tracking-wider mb-2">
+          <h1 className="font-display text-3xl md:text-5xl tracking-wider mb-1 md:mb-2">
             <span className="text-gradient-gold">GAME</span>
-            <span className="text-chalk ml-3">LOBBY</span>
+            <span className="text-chalk ml-2 md:ml-3">LOBBY</span>
           </h1>
-          <div className="divider-gold w-32 mx-auto" />
+          <div className="divider-gold w-24 md:w-32 mx-auto" />
         </div>
 
-        {/* Tab Selector */}
-        <div className="flex gap-1 p-1.5 bg-noir border border-edge rounded-xl animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
+        {/* Tab Selector - compact on mobile */}
+        <div className="flex gap-1 p-1 md:p-1.5 bg-noir border border-edge rounded-lg md:rounded-xl animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
           <button
             onClick={() => { play('click'); config?.quickMatch.enabled && setActiveTab('quickmatch') }}
             disabled={!config?.quickMatch.enabled}
-            className={`flex-1 py-3 px-4 rounded-lg font-display tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
+            className={`flex-1 py-2 md:py-3 px-3 md:px-4 rounded-md md:rounded-lg font-display text-sm md:text-base tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
               !config?.quickMatch.enabled
                 ? 'text-ember cursor-not-allowed opacity-50'
                 : activeTab === 'quickmatch'
@@ -283,7 +307,7 @@ export default function LobbyPage() {
           </button>
           <button
             onClick={() => { play('click'); setActiveTab('custom') }}
-            className={`flex-1 py-3 px-4 rounded-lg font-display tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
+            className={`flex-1 py-2 md:py-3 px-3 md:px-4 rounded-md md:rounded-lg font-display text-sm md:text-base tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
               activeTab === 'custom'
                 ? 'bg-gradient-to-r from-gold to-gold-dark text-void shadow-gold'
                 : 'text-ash hover:text-chalk'
@@ -296,39 +320,44 @@ export default function LobbyPage() {
         {/* Quick Match Panel */}
         {activeTab === 'quickmatch' && config?.quickMatch.enabled && (
           <Card variant="elevated" className="animate-slide-up" style={{ animationDelay: '0.2s', opacity: 0 }}>
-            <CardContent className="space-y-6">
+            <CardContent className="!p-4 md:!p-6 space-y-4 md:space-y-6">
               <div className="text-center">
-                <div className="inline-flex items-center gap-3 px-4 py-2 bg-smoke/50 border border-edge rounded-full mb-4">
+                <div className="inline-flex items-center gap-2 md:gap-3 px-3 md:px-4 py-1.5 md:py-2 bg-smoke/50 border border-edge rounded-full mb-2 md:mb-4">
                   <div className="relative">
                     <div className="w-2 h-2 bg-alive-light rounded-full" />
                     <div className="absolute inset-0 w-2 h-2 bg-alive-light rounded-full animate-ping opacity-75" />
                   </div>
-                  <span className="text-sm font-mono text-ash">
+                  <span className="text-xs md:text-sm font-mono text-ash">
                     {queueCount} {queueCount === 1 ? 'player' : 'players'} searching
                   </span>
                 </div>
-                <p className="text-ash text-sm">
+                <p className="text-ash text-xs md:text-sm">
                   Jump into action instantly. Get matched with {config.quickMatch.minPlayers - 1} other players.
                 </p>
               </div>
 
-              {/* Quick Match Info */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-smoke/50 border border-edge p-4 rounded-xl text-center">
-                  <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Entry</span>
-                  <span className="font-display text-2xl text-gold">{config.quickMatch.seatPrice}</span>
-                  <span className="text-xs text-ash ml-1">KAS</span>
+              {/* Quick Match Info - compact on mobile */}
+              <div className="grid grid-cols-3 gap-2 md:gap-3">
+                <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl text-center">
+                  <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">Entry</span>
+                  <span className="font-display text-lg md:text-2xl text-gold">{config.quickMatch.seatPrice}</span>
+                  <span className="text-[10px] md:text-xs text-ash ml-0.5 md:ml-1">KAS</span>
                 </div>
-                <div className="bg-smoke/50 border border-edge p-4 rounded-xl text-center">
-                  <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Players</span>
-                  <span className="font-display text-2xl text-chalk">{config.quickMatch.minPlayers}</span>
+                <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl text-center">
+                  <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">Players</span>
+                  <span className="font-display text-lg md:text-2xl text-chalk">{config.quickMatch.minPlayers}</span>
                 </div>
-                <div className="bg-smoke/50 border border-edge p-4 rounded-xl text-center">
-                  <span className="text-[10px] font-mono text-ember uppercase tracking-wider block mb-1">Win</span>
-                  <span className="font-display text-2xl text-alive-light">
-                    {formatKASPrecise((config.quickMatch.seatPrice * config.quickMatch.minPlayers * ((100 - config.houseCutPercent) / 100)) / (config.quickMatch.minPlayers - 1), 2)}
+                <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl text-center">
+                  <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">Win</span>
+                  <span className="font-display text-lg md:text-2xl text-alive-light">
+                    {formatKASPrecise(calculatePayouts(
+                      config.quickMatch.seatPrice,
+                      config.quickMatch.minPlayers,
+                      config.houseCutPercent,
+                      config.quickMatch.minPlayers - 1
+                    ).perSurvivor, 2)}
                   </span>
-                  <span className="text-xs text-ash ml-1">KAS</span>
+                  <span className="text-[10px] md:text-xs text-ash ml-0.5 md:ml-1 hidden md:inline">KAS</span>
                 </div>
               </div>
 
@@ -378,7 +407,7 @@ export default function LobbyPage() {
                       </div>
                       <div className="text-left">
                         <span className="text-xs font-mono text-ember uppercase tracking-wider block">Test Bots</span>
-                        <span className="text-xs text-ash">{botStatus.botCount} bots will auto-fill games</span>
+                        <span className="text-xs text-ash">Bots will auto-fill the game</span>
                       </div>
                     </div>
                     <div className={`relative w-11 h-6 rounded-full transition-colors ${botStatus.enabled ? 'bg-alive' : 'bg-gunmetal'}`}>
@@ -527,7 +556,12 @@ export default function LobbyPage() {
                   <span className="text-xs font-mono text-ember uppercase tracking-wider">Survivor Share</span>
                   <div className="flex items-baseline gap-2">
                     <span className="font-display text-xl text-alive-light">
-                      {formatKAS(((parseFloat(customPrice) || 0) * maxPlayers * ((100 - (config?.houseCutPercent ?? 5)) / 100)) / (maxPlayers - 1), 1)}
+                      {formatKAS(calculatePayouts(
+                        parseFloat(customPrice) || 0,
+                        maxPlayers,
+                        config?.houseCutPercent ?? 5,
+                        maxPlayers - 1
+                      ).perSurvivor, 1)}
                     </span>
                     <span className="text-sm text-ash">KAS each</span>
                   </div>

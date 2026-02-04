@@ -10,7 +10,9 @@ import {
   type JoinQueuePayload,
   type LeaveQueuePayload,
   type SubmitClientSeedPayload,
+  type ReadyForTurnPayload,
   type PullTriggerPayload,
+  type ConfirmResultsShownPayload,
   type RoomUpdatePayload,
   type ErrorPayload,
 } from '../../../shared/index.js'
@@ -61,7 +63,7 @@ export class WSServer {
 
         // Send room:assigned event
         this.send(client.ws, {
-          event: 'room:assigned',
+          event: WSEvent.ROOM_ASSIGNED,
           payload: { roomId }
         })
       }
@@ -148,8 +150,20 @@ export class WSServer {
               logger.info('Player disconnected during FUNDING, keeping seat', { walletAddress: client.walletAddress, roomId })
             } else if (room.state === 'PLAYING') {
               // PLAYING: do NOT forfeit on disconnect - player may be refreshing
-              // The 30s turn timeout handles AFK players naturally
-              logger.info('Player disconnected during PLAYING, keeping seat (may reconnect)', { walletAddress: client.walletAddress, roomId })
+              // BUT if it's their turn, signal ready to avoid stalling the room
+              // (they'll still have 30s to reconnect and pull)
+              const currentShooter = roomManager.getCurrentShooter(roomId)
+              if (currentShooter && client.walletAddress && currentShooter.walletAddress === client.walletAddress) {
+                // It's this player's turn - signal ready to start the timer
+                // This prevents the room from stalling if they don't reconnect
+                const turnId = roomManager.getCurrentTurnId(roomId)
+                if (turnId !== null) {
+                  roomManager.readyForTurn(roomId, client.walletAddress, turnId)
+                  logger.info('Player disconnected during their turn, signaling ready to start timer', { walletAddress: client.walletAddress, roomId, turnId })
+                }
+              } else {
+                logger.info('Player disconnected during PLAYING, keeping seat (may reconnect)', { walletAddress: client.walletAddress, roomId })
+              }
             }
           } catch (err) {
             logger.debug('Could not handle disconnected player', { walletAddress: client.walletAddress, roomId, error: err })
@@ -193,8 +207,16 @@ export class WSServer {
           this.handleSubmitClientSeed(ws, payload as SubmitClientSeedPayload)
           break
 
+        case WSEvent.READY_FOR_TURN:
+          this.handleReadyForTurn(ws, payload as ReadyForTurnPayload)
+          break
+
         case WSEvent.PULL_TRIGGER:
           this.handlePullTrigger(ws, payload as PullTriggerPayload)
+          break
+
+        case WSEvent.CONFIRM_RESULTS_SHOWN:
+          this.handleConfirmResultsShown(ws, payload as ConfirmResultsShownPayload)
           break
 
         case 'subscribe_room':
@@ -287,7 +309,7 @@ export class WSServer {
   }
 
   private handleJoinQueue(ws: WebSocket, payload: JoinQueuePayload): void {
-    const { mode, seatPrice, walletAddress } = payload
+    const { mode, seatPrice, walletAddress, wantsBots } = payload
     const client = this.clients.get(ws)
     if (!client) return
 
@@ -298,17 +320,22 @@ export class WSServer {
     }
 
     client.walletAddress = walletAddress
-    queueManager.joinQueue(walletAddress, mode, seatPrice)
 
-    // Add bots to fill the queue if bot manager is enabled
+    // Check if bot manager is enabled and user wants bots
     const botManager = (global as any).botManager
-    if (botManager?.enabled && seatPrice) {
+    const shouldAddBots = !!(wantsBots && botManager?.enabled)
+
+    queueManager.joinQueue(walletAddress, mode, seatPrice, shouldAddBots)
+
+    // If user wants bots and bot manager is enabled, add bots to queue
+    // They'll be matched with this user since both have wantsBots=true
+    if (shouldAddBots && seatPrice) {
       botManager.addBotsToQueue(mode, seatPrice)
     }
 
     // Send confirmation (could include queue position)
     this.send(ws, {
-      event: 'queue:joined',
+      event: WSEvent.QUEUE_JOINED,
       payload: { mode, seatPrice },
     })
   }
@@ -326,7 +353,7 @@ export class WSServer {
     queueManager.leaveQueue(client.walletAddress)
 
     this.send(ws, {
-      event: 'queue:left',
+      event: WSEvent.QUEUE_LEFT,
       payload: {},
     })
   }
@@ -347,6 +374,24 @@ export class WSServer {
     this.broadcastRoomUpdate(roomId)
   }
 
+  private handleReadyForTurn(ws: WebSocket, payload: ReadyForTurnPayload): void {
+    const { roomId, turnId } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
+
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+
+    const result = roomManager.readyForTurn(roomId, client.walletAddress, turnId)
+
+    if (!result.success) {
+      this.sendError(ws, result.error || 'Failed to signal ready')
+    }
+  }
+
   private handlePullTrigger(ws: WebSocket, payload: PullTriggerPayload): void {
     const { roomId } = payload
     const client = this.clients.get(ws)
@@ -363,6 +408,20 @@ export class WSServer {
     if (!result.success) {
       this.sendError(ws, result.error || 'Failed to pull trigger')
     }
+  }
+
+  private handleConfirmResultsShown(ws: WebSocket, payload: ConfirmResultsShownPayload): void {
+    const { roomId } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
+
+    // Security: Use stored wallet address from connection state, not from payload
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+
+    roomManager.confirmResultsShown(roomId, client.walletAddress)
   }
 
   private broadcastRoomUpdate(roomId: string): void {
@@ -432,7 +491,7 @@ export class WSServer {
     const uniqueUsers = this.getUniqueUserCount()
     this.clients.forEach((client) => {
       this.send(client.ws, {
-        event: 'connection:count',
+        event: WSEvent.CONNECTION_COUNT,
         payload: { count: uniqueUsers }
       })
     })

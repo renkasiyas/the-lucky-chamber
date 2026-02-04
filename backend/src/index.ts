@@ -4,6 +4,7 @@
 import express from 'express'
 import cors from 'cors'
 // kaspa-wasm types imported dynamically where needed
+import { WSEvent } from '../../shared/index.js'
 import { config } from './config.js'
 import { router } from './api/routes.js'
 import { WSServer } from './ws/websocket-server.js'
@@ -75,7 +76,7 @@ async function main() {
   if (config.botsEnabled) {
     botManager.initializeBotAddresses()
 
-    // Log bot addresses for funding
+    // Log bot addresses for funding (first 5 for legacy, expanded pool supports multiple games)
     const botAddresses = botManager.getBotAddresses()
     logger.info('Bot addresses (fund these with testnet KAS):', {
       bot1: botAddresses[0],
@@ -83,22 +84,26 @@ async function main() {
       bot3: botAddresses[2],
       bot4: botAddresses[3],
       bot5: botAddresses[4],
+      totalBots: botAddresses.length,
+      note: 'Additional bots (6-20) support multiple simultaneous games'
     })
   }
 
   // Wire up queue manager callbacks
-  queueManager.setRoomCreatedCallback((roomId, playerAddresses) => {
+  queueManager.setRoomCreatedCallback((roomId, playerAddresses, addBots) => {
     // Notify connected WebSocket clients about room assignment
     wsServer.handleRoomCreatedFromQueue(roomId, playerAddresses)
 
-    // Notify bot manager to make deposits
-    botManager.handleRoomCreated(roomId, playerAddresses).catch(err => {
-      logger.error('Bot manager room created handler failed', { error: err?.message || String(err) })
-    })
+    // Only notify bot manager if this room should have bots
+    if (addBots) {
+      botManager.handleRoomCreated(roomId, playerAddresses).catch(err => {
+        logger.error('Bot manager room created handler failed', { error: err?.message || String(err) })
+      })
+    }
   })
 
   queueManager.setQueueUpdateCallback((queueKey, count) => {
-    wsServer.broadcast('queue:update', { queueKey, count })
+    wsServer.broadcast(WSEvent.QUEUE_UPDATE, { queueKey, count })
   })
 
   // Wire up room manager callback to notify bot manager when rooms complete

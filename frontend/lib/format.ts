@@ -47,3 +47,31 @@ export function formatKASPrecise(kas: number, maxDecimals: number = 2): string {
   })
   return formatted
 }
+
+/**
+ * Calculates payout values using integer math (sompi) to match backend precision.
+ * Returns values in KAS for display.
+ */
+export function calculatePayouts(
+  seatPrice: number,
+  confirmedCount: number,
+  houseCutPercent: number,
+  survivorCount: number
+): { pot: number; houseCut: number; payoutPool: number; perSurvivor: number } {
+  const SOMPI_PER_KAS = 100_000_000
+
+  // Backend uses integer math in sompi
+  const seatPriceSompi = Math.floor(seatPrice * SOMPI_PER_KAS)
+  const potSompi = seatPriceSompi * confirmedCount
+  const houseCutSompi = Math.floor(potSompi * houseCutPercent / 100)
+  const payoutPoolSompi = potSompi - houseCutSompi
+  const perSurvivorSompi = survivorCount > 0 ? Math.floor(payoutPoolSompi / survivorCount) : 0
+
+  // Convert back to KAS for display
+  return {
+    pot: potSompi / SOMPI_PER_KAS,
+    houseCut: houseCutSompi / SOMPI_PER_KAS,
+    payoutPool: payoutPoolSompi / SOMPI_PER_KAS,
+    perSurvivor: perSurvivorSompi / SOMPI_PER_KAS,
+  }
+}

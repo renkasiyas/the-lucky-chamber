@@ -28,6 +28,7 @@ vi.mock('../crypto/wallet.js', () => ({
 vi.mock('../game/room-manager.js', () => ({
   roomManager: {
     getRoom: vi.fn().mockReturnValue(null),
+    readyForTurn: vi.fn().mockReturnValue({ success: true }),
     pullTrigger: vi.fn().mockReturnValue({ success: true }),
   },
 }))
@@ -53,9 +54,8 @@ describe('BotManager', () => {
 
     it('should create disabled bot manager by default', () => {
       botManager = new BotManager('testnet-10')
-      // Verify by starting - should log "disabled"
-      botManager.start()
-      expect(logger.info).toHaveBeenCalledWith('Bot manager disabled')
+      // Default constructor creates disabled manager
+      expect(botManager.enabled).toBe(false)
     })
 
     it('should create enabled bot manager when specified', () => {
@@ -66,10 +66,12 @@ describe('BotManager', () => {
   })
 
   describe('start', () => {
-    it('should log disabled message when disabled', () => {
+    it('should enable and start the bot manager', () => {
       botManager = new BotManager('testnet-10', false)
+      expect(botManager.enabled).toBe(false)
       botManager.start()
-      expect(logger.info).toHaveBeenCalledWith('Bot manager disabled')
+      expect(botManager.enabled).toBe(true)
+      expect(logger.info).toHaveBeenCalledWith('Bot manager started', { network: 'testnet-10', botCount: 0 })
     })
 
     it('should log started message when enabled', () => {
@@ -129,6 +131,7 @@ describe('BotManager', () => {
         roomId: 'room-123',
         playerCount: 2,
         botCount: 0,
+        totalActiveBotsNow: 0,
       })
     })
   })
@@ -151,6 +154,8 @@ describe('BotManager', () => {
 
       expect(logger.debug).toHaveBeenCalledWith('Bot manager: Room completed', {
         roomId: 'room-123',
+        releasedBots: 0,
+        availableBotsNow: 0, // 0 because initializeBotAddresses not called
       })
     })
   })

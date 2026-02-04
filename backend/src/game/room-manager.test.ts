@@ -13,7 +13,7 @@ import { GameMode, RoomState, WSEvent, type Room } from '../../../shared/index.j
 vi.mock('../db/store.js', () => ({
   store: {
     getRoom: vi.fn(),
-    getAllRooms: vi.fn(),
+    getAllRooms: vi.fn().mockReturnValue([]), // Default to empty array for active room checks
     createRoom: vi.fn(),
     updateRoom: vi.fn(),
     updateSeat: vi.fn(),
@@ -111,6 +111,7 @@ describe('RoomManager', () => {
     depositAddress: 'kaspatest:deposit123',
     lockHeight: null,
     settlementBlockHeight: null,
+    settlementBlockHash: null,
     serverCommit: 'commit123',
     serverSeed: null,
     houseCutPercent: 5,

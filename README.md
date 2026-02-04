@@ -68,9 +68,9 @@ See `.env.example` files in `backend/` and `frontend/` directories.
 
 ## Development
 
-- Frontend runs on `http://localhost:3000`
-- Backend API on `http://localhost:3001`
-- WebSocket on `ws://localhost:3002`
+- Frontend runs on `http://localhost:4200`
+- Backend API on `http://localhost:4201`
+- WebSocket on `ws://localhost:4202`
 
 ## Architecture
 

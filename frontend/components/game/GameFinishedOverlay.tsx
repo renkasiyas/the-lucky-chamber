@@ -3,10 +3,10 @@
 
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Room } from '../../../shared/index'
-import { formatKAS } from '../../lib/format'
+import { formatKAS, calculatePayouts } from '../../lib/format'
 import { useSound } from '../../hooks/useSound'
 import { ProvablyFairModal } from '../ui/ProvablyFairModal'
 
@@ -16,6 +16,7 @@ interface GameFinishedOverlayProps {
   explorerUrl: string
   onDismiss: () => void
   onPlayAgain: () => void
+  onResultsShown?: () => void // Called when results are displayed - signals backend to send payout
 }
 
 export function GameFinishedOverlay({
@@ -24,21 +25,26 @@ export function GameFinishedOverlay({
   explorerUrl,
   onDismiss,
   onPlayAgain,
+  onResultsShown,
 }: GameFinishedOverlayProps) {
   // Skip suspense phase - we already had the dramatic BANG! reveal in ChamberGame
   // Go straight to reveal to avoid "The chamber falls silent" after we just saw an explosion
   const [phase, setPhase] = useState<'suspense' | 'intro' | 'reveal' | 'results'>('reveal')
   const [showVerifier, setShowVerifier] = useState(false)
-  const { play: playSound, stop: stopSound } = useSound()
+  const { play: playSound } = useSound()
+  const resultsShownRef = useRef(false)
 
   const survivors = room.seats.filter(s => s.alive)
   const eliminated = room.seats.filter(s => s.walletAddress && !s.alive)
   const mySeat = room.seats.find(s => s.walletAddress === myAddress)
   const iAmSurvivor = mySeat?.alive ?? false
-  const pot = room.seats.filter(s => s.confirmed).length * room.seatPrice
-  const houseCut = pot * (room.houseCutPercent / 100)
-  const payoutPool = pot - houseCut
-  const perSurvivor = survivors.length > 0 ? payoutPool / survivors.length : 0
+  const confirmedCount = room.seats.filter(s => s.confirmed).length
+  const { pot, perSurvivor } = calculatePayouts(
+    room.seatPrice,
+    confirmedCount,
+    room.houseCutPercent,
+    survivors.length
+  )
 
   // Generate confetti pieces once
   const confettiPieces = useMemo(() =>
@@ -54,9 +60,18 @@ export function GameFinishedOverlay({
     })),
   [])
 
+  // Signal backend on mount (once only)
   useEffect(() => {
-    // We start at 'reveal' phase - the drama already happened in ChamberGame
-    // Just play win sound if survivor and transition to results
+    if (!resultsShownRef.current) {
+      resultsShownRef.current = true
+      onResultsShown?.()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount
+
+  // Play win sound once and transition to results
+  useEffect(() => {
+    // Play win sound only once for survivors
     if (iAmSurvivor) {
       playSound('win')
     }
@@ -67,20 +82,35 @@ export function GameFinishedOverlay({
     return () => {
       clearTimeout(t1)
     }
-  }, [iAmSurvivor, playSound])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount - iAmSurvivor won't change
+
+  // Button handlers with explicit touch support for WebView
+  // Use setTimeout to delay DOM changes, allowing touch events to complete
+  // This prevents iOS/Safari from getting confused when the overlay unmounts mid-touch
+  const handleDismiss = () => {
+    playSound('click')
+    setTimeout(() => onDismiss(), 0)
+  }
+
+  const handlePlayAgain = () => {
+    playSound('click')
+    setTimeout(() => onPlayAgain(), 0)
+  }
+
+  const handleVerify = () => {
+    playSound('click')
+    setShowVerifier(true)
+  }
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden"
-    >
-      {/* Cinematic backdrop */}
+    <div className="fixed inset-0 z-50" style={{ pointerEvents: 'none' }}>
+      {/* Background layers - all pointer-events-none */}
       <div className="absolute inset-0 bg-void" />
 
       {/* Dramatic radial gradient */}
       <motion.div
-        className="absolute inset-0"
+        className="absolute inset-0 pointer-events-none"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 1 }}
@@ -142,417 +172,290 @@ export function GameFinishedOverlay({
         </div>
       )}
 
-      {/* Content */}
-      <div className="relative z-10 w-full max-w-lg mx-4">
-        <AnimatePresence mode="wait">
-          {/* Phase 0: Suspense - dramatic buildup */}
-          {phase === 'suspense' && (
-            <motion.div
-              key="suspense"
-              className="text-center"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-            >
-              {/* Heartbeat visualizer */}
-              <div className="flex items-center justify-center gap-1 mb-8">
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <motion.div
-                    key={i}
-                    className="w-1.5 bg-blood-light rounded-full"
-                    animate={{ height: ['12px', '48px', '12px'] }}
-                    transition={{
-                      repeat: Infinity,
-                      duration: 0.5,
-                      delay: i * 0.1,
-                      ease: 'easeInOut'
-                    }}
-                  />
-                ))}
-              </div>
+      {/* Close button - ALWAYS on top and clickable */}
+      {!showVerifier && (
+        <button
+          type="button"
+          onClick={handleDismiss}
+          onTouchEnd={(e) => { e.preventDefault(); handleDismiss() }}
+          className="fixed top-4 right-4 z-[200] p-4 min-w-[56px] min-h-[56px] bg-noir/80 text-ash hover:text-chalk hover:bg-noir active:bg-smoke rounded-full transition-colors"
+          style={{ touchAction: 'manipulation', pointerEvents: 'auto' }}
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      )}
 
-              <motion.p
-                className="text-ash/60 font-mono text-sm uppercase tracking-[0.4em] mb-4"
-                animate={{ opacity: [0.4, 0.8, 0.4] }}
-                transition={{ repeat: Infinity, duration: 1 }}
-              >
-                The chamber falls silent...
-              </motion.p>
-
-              <motion.h2
-                className="font-display text-4xl text-gold tracking-[0.3em]"
-                animate={{
-                  textShadow: [
-                    '0 0 20px rgba(212,175,55,0.3)',
-                    '0 0 50px rgba(212,175,55,0.7)',
-                    '0 0 20px rgba(212,175,55,0.3)'
-                  ]
-                }}
-                transition={{ repeat: Infinity, duration: 0.8 }}
-              >
-                THE SURVIVOR IS...
-              </motion.h2>
-
-              <motion.div
-                className="mt-8 flex justify-center gap-2"
-                animate={{ opacity: [0.3, 1, 0.3] }}
-                transition={{ repeat: Infinity, duration: 0.4 }}
-              >
-                <span className="text-5xl text-chalk">•</span>
-                <span className="text-5xl text-chalk">•</span>
-                <span className="text-5xl text-chalk">•</span>
-              </motion.div>
-            </motion.div>
-          )}
-
-          {/* Phase 1: Intro flash */}
-          {phase === 'intro' && (
-            <motion.div
-              key="intro"
-              className="text-center"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0, scale: 1.5 }}
-            >
-              <motion.div
-                className="text-8xl font-display text-gold"
-                animate={{
-                  opacity: [0.3, 1, 0.3],
-                  scale: [0.95, 1, 0.95],
-                }}
-                transition={{ repeat: Infinity, duration: 0.6 }}
-              >
-                ⚔
-              </motion.div>
-            </motion.div>
-          )}
-
-          {/* Phase 2: Dramatic Reveal */}
-          {phase === 'reveal' && (
-            <motion.div
-              key="reveal"
-              className="text-center"
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, y: -30 }}
-              transition={{ type: 'spring', damping: 15 }}
-            >
-              {/* Animated icon */}
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ type: 'spring', damping: 10, stiffness: 200 }}
-                className="mb-8"
-              >
-                {iAmSurvivor ? (
-                  <div className="relative w-32 h-32 mx-auto">
-                    {/* Explosive burst effect */}
-                    <motion.div
-                      className="absolute inset-0 rounded-full"
-                      initial={{ scale: 0, opacity: 1 }}
-                      animate={{ scale: [0, 3, 4], opacity: [1, 0.5, 0] }}
-                      transition={{ duration: 0.8 }}
-                      style={{ background: 'radial-gradient(circle, rgba(16,185,129,0.8), transparent)' }}
-                    />
-                    {/* Pulsing rings */}
-                    <motion.div
-                      className="absolute inset-0 rounded-full border-4 border-alive"
-                      animate={{ scale: [1, 1.6, 1.6], opacity: [0.8, 0, 0] }}
-                      transition={{ repeat: Infinity, duration: 1.2 }}
-                    />
-                    <motion.div
-                      className="absolute inset-0 rounded-full border-4 border-alive"
-                      animate={{ scale: [1, 1.6, 1.6], opacity: [0.8, 0, 0] }}
-                      transition={{ repeat: Infinity, duration: 1.2, delay: 0.4 }}
-                    />
-                    <motion.div
-                      className="absolute inset-0 rounded-full border-2 border-gold"
-                      animate={{ scale: [1, 1.8, 1.8], opacity: [0.6, 0, 0] }}
-                      transition={{ repeat: Infinity, duration: 1.5, delay: 0.2 }}
-                    />
-                    {/* Main circle - with shimmer */}
-                    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-alive via-alive-light to-alive shadow-[0_0_80px_rgba(16,185,129,0.8)] overflow-hidden">
-                      <motion.div
-                        className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent -skew-x-12"
-                        animate={{ x: ['-200%', '200%'] }}
-                        transition={{ repeat: Infinity, duration: 2, ease: 'linear' }}
-                      />
-                    </div>
-                    {/* Crown for victory */}
-                    <motion.div
-                      className="absolute -top-10 left-1/2 -translate-x-1/2 text-4xl"
-                      initial={{ y: -20, opacity: 0, scale: 0 }}
-                      animate={{ y: 0, opacity: 1, scale: 1 }}
-                      transition={{ delay: 0.3, type: 'spring', stiffness: 300 }}
-                    >
-                      👑
-                    </motion.div>
-                    {/* Checkmark */}
-                    <svg className="absolute inset-0 w-full h-full p-8 text-void" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <motion.path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={3}
-                        d="M5 13l4 4L19 7"
-                        initial={{ pathLength: 0 }}
-                        animate={{ pathLength: 1 }}
-                        transition={{ duration: 0.5, delay: 0.2 }}
-                      />
-                    </svg>
-                  </div>
-                ) : (
-                  <div className="relative w-28 h-28 mx-auto">
-                    {/* Pulsing rings */}
-                    <motion.div
-                      className="absolute inset-0 rounded-full border-2 border-blood/50"
-                      animate={{ scale: [1, 1.3, 1.3], opacity: [0.5, 0, 0] }}
-                      transition={{ repeat: Infinity, duration: 1.2 }}
-                    />
-                    {/* Main circle */}
-                    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-blood via-blood-light to-blood shadow-[0_0_60px_rgba(139,0,0,0.6)]" />
-                    {/* X mark */}
-                    <svg className="absolute inset-0 w-full h-full p-7 text-chalk" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <motion.path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={3}
-                        d="M6 18L18 6M6 6l12 12"
-                        initial={{ pathLength: 0 }}
-                        animate={{ pathLength: 1 }}
-                        transition={{ duration: 0.4, delay: 0.1 }}
-                      />
-                    </svg>
-                  </div>
-                )}
-              </motion.div>
-
-              <motion.h1
-                className={`font-display text-7xl tracking-widest ${
-                  iAmSurvivor
-                    ? 'text-alive-light drop-shadow-[0_0_60px_rgba(16,185,129,0.9)]'
-                    : 'text-blood-light drop-shadow-[0_0_40px_rgba(239,68,68,0.8)]'
-                }`}
-                initial={{ y: 30, opacity: 0, scale: 0.5 }}
-                animate={{ y: 0, opacity: 1, scale: [0.5, 1.1, 1] }}
-                transition={{ delay: 0.2, duration: 0.5 }}
-              >
-                {iAmSurvivor ? 'VICTORY!' : 'DEFEATED'}
-              </motion.h1>
-
-              {iAmSurvivor && (
-                <motion.p
-                  className="mt-4 text-alive/80 font-mono text-lg tracking-wider"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.5 }}
+      {/* Main content area - scrollable, stops ABOVE the fixed buttons */}
+      <div className="absolute inset-0 bottom-[200px] overflow-y-auto pointer-events-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <div className="min-h-full flex flex-col justify-center px-4 py-16">
+          <div className="w-full max-w-lg mx-auto">
+            <AnimatePresence mode="wait">
+              {/* Phase 2: Dramatic Reveal */}
+              {phase === 'reveal' && (
+                <motion.div
+                  key="reveal"
+                  className="text-center"
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, y: -30 }}
+                  transition={{ type: 'spring', damping: 15 }}
                 >
-                  YOU SURVIVED THE CHAMBER
-                </motion.p>
-              )}
-            </motion.div>
-          )}
-
-          {/* Phase 3: Results Card */}
-          {phase === 'results' && (
-            <motion.div
-              key="results"
-              initial={{ opacity: 0, y: 40 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ type: 'spring', damping: 20 }}
-            >
-              {/* Title */}
-              <motion.div
-                className="text-center mb-6"
-                initial={{ y: -20, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-              >
-                <div className="text-6xl mb-3">{iAmSurvivor ? '🏆' : '💀'}</div>
-                <h1 className={`font-display text-4xl tracking-[0.3em] ${
-                  iAmSurvivor ? 'text-alive-light' : 'text-blood-light'
-                }`}>
-                  {iAmSurvivor ? 'VICTORY' : 'ELIMINATED'}
-                </h1>
-                <p className={`text-sm font-mono mt-2 ${iAmSurvivor ? 'text-alive/70' : 'text-blood/70'}`}>
-                  {iAmSurvivor ? 'You walked away alive!' : 'The chamber takes another soul...'}
-                </p>
-              </motion.div>
-
-              {/* Main Card */}
-              <motion.div
-                className="bg-gradient-to-b from-noir to-void border border-edge/50 rounded-3xl overflow-hidden shadow-2xl"
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.1 }}
-              >
-                {/* Players Row */}
-                <div className="p-6 bg-smoke/20 border-b border-edge/30">
-                  <div className="flex items-center justify-center gap-2 mb-4">
-                    <span className="text-alive-light font-display text-lg">{survivors.length}</span>
-                    <span className="text-ash text-sm">survived</span>
-                    <span className="text-edge mx-2">•</span>
-                    <span className="text-blood-light font-display text-lg">{eliminated.length}</span>
-                    <span className="text-ash text-sm">eliminated</span>
-                  </div>
-
-                  <div className="flex justify-center items-center gap-3 flex-wrap">
-                    {room.seats
-                      .filter(s => s.walletAddress)
-                      .sort((a, b) => {
-                        // Sort by payment confirmation time (first payer = position 1)
-                        const aTime = a.confirmedAt ?? a.index
-                        const bTime = b.confirmedAt ?? b.index
-                        return aTime - bTime
-                      })
-                      .map((seat, i) => {
-                        const isDead = !seat.alive
-                        const isMe = seat.walletAddress === myAddress
-                        return (
-                          <motion.div
-                            key={seat.index}
-                            initial={{ scale: 0, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            transition={{ delay: 0.15 + i * 0.06, type: 'spring', damping: 12 }}
-                            className="relative"
-                          >
-                            <div className={`
-                              w-12 h-12 rounded-full flex items-center justify-center font-display text-lg
-                              transition-all duration-300 relative
-                              ${isDead
-                                ? 'bg-blood/20 text-blood-light border-2 border-blood/40'
-                                : isMe
-                                  ? 'bg-gradient-to-br from-gold to-gold-dark text-void border-2 border-gold shadow-[0_0_20px_rgba(212,175,55,0.5)]'
-                                  : 'bg-gradient-to-br from-alive to-alive-light text-void shadow-[0_0_12px_rgba(16,185,129,0.4)]'
-                              }
-                            `}>
-                              {isDead ? '✕' : i + 1}
-                              {isMe && !isDead && (
-                                <motion.div
-                                  className="absolute -inset-1 rounded-full border-2 border-gold/50"
-                                  animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }}
-                                  transition={{ repeat: Infinity, duration: 1.5 }}
-                                />
-                              )}
-                            </div>
-                            {isMe && (
-                              <span className={`absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] font-bold uppercase tracking-wider ${isDead ? 'text-blood' : 'text-gold'}`}>
-                                YOU
-                              </span>
-                            )}
-                          </motion.div>
-                        )
-                      })}
-                  </div>
-                </div>
-
-                {/* Payout Section */}
-                <div className="p-6 space-y-4">
-                  {/* Winner highlight */}
-                  {iAmSurvivor && (
-                    <motion.div
-                      initial={{ scale: 0.9, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ delay: 0.3, type: 'spring' }}
-                      className="relative bg-gradient-to-r from-alive/20 via-alive/10 to-alive/20 border border-alive/40 rounded-2xl p-5 text-center overflow-hidden"
-                    >
-                      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.15),transparent_70%)]" />
-                      <span className="text-[10px] font-mono text-alive/80 uppercase tracking-[0.2em] block mb-2 relative">
-                        Your Winnings
-                      </span>
-                      <div className="relative">
-                        <span className="font-display text-5xl text-alive-light drop-shadow-[0_0_20px_rgba(16,185,129,0.5)]">
-                          {formatKAS(perSurvivor)}
-                        </span>
-                        <span className="text-alive text-xl ml-2">KAS</span>
+                  {/* Animated icon */}
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: 'spring', damping: 10, stiffness: 200 }}
+                    className="mb-8"
+                  >
+                    {iAmSurvivor ? (
+                      <div className="relative w-32 h-32 mx-auto">
+                        <motion.div
+                          className="absolute inset-0 rounded-full"
+                          initial={{ scale: 0, opacity: 1 }}
+                          animate={{ scale: [0, 3, 4], opacity: [1, 0.5, 0] }}
+                          transition={{ duration: 0.8 }}
+                          style={{ background: 'radial-gradient(circle, rgba(16,185,129,0.8), transparent)' }}
+                        />
+                        <motion.div
+                          className="absolute inset-0 rounded-full border-4 border-alive"
+                          animate={{ scale: [1, 1.6, 1.6], opacity: [0.8, 0, 0] }}
+                          transition={{ repeat: Infinity, duration: 1.2 }}
+                        />
+                        <div className="absolute inset-0 rounded-full bg-gradient-to-br from-alive via-alive-light to-alive shadow-[0_0_80px_rgba(16,185,129,0.8)]" />
+                        <motion.div
+                          className="absolute -top-10 left-1/2 -translate-x-1/2 text-4xl"
+                          initial={{ y: -20, opacity: 0, scale: 0 }}
+                          animate={{ y: 0, opacity: 1, scale: 1 }}
+                          transition={{ delay: 0.3, type: 'spring', stiffness: 300 }}
+                        >
+                          👑
+                        </motion.div>
+                        <svg className="absolute inset-0 w-full h-full p-8 text-void" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <motion.path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={3}
+                            d="M5 13l4 4L19 7"
+                            initial={{ pathLength: 0 }}
+                            animate={{ pathLength: 1 }}
+                            transition={{ duration: 0.5, delay: 0.2 }}
+                          />
+                        </svg>
                       </div>
-                    </motion.div>
-                  )}
+                    ) : (
+                      <div className="relative w-28 h-28 mx-auto">
+                        <motion.div
+                          className="absolute inset-0 rounded-full border-2 border-blood/50"
+                          animate={{ scale: [1, 1.3, 1.3], opacity: [0.5, 0, 0] }}
+                          transition={{ repeat: Infinity, duration: 1.2 }}
+                        />
+                        <div className="absolute inset-0 rounded-full bg-gradient-to-br from-blood via-blood-light to-blood shadow-[0_0_60px_rgba(139,0,0,0.6)]" />
+                        <svg className="absolute inset-0 w-full h-full p-7 text-chalk" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <motion.path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={3}
+                            d="M6 18L18 6M6 6l12 12"
+                            initial={{ pathLength: 0 }}
+                            animate={{ pathLength: 1 }}
+                            transition={{ duration: 0.4, delay: 0.1 }}
+                          />
+                        </svg>
+                      </div>
+                    )}
+                  </motion.div>
 
-                  {/* Stats Grid */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-smoke/30 border border-edge/30 rounded-xl p-4 text-center">
-                      <span className="text-[9px] font-mono text-ember/80 uppercase tracking-wider block mb-1">Total Pot</span>
-                      <span className="font-display text-2xl text-gold">{formatKAS(pot, 0)}</span>
-                      <span className="text-ash text-xs ml-1">KAS</span>
-                    </div>
-                    <div className="bg-smoke/30 border border-edge/30 rounded-xl p-4 text-center">
-                      <span className="text-[9px] font-mono text-ember/80 uppercase tracking-wider block mb-1">Per Survivor</span>
-                      <span className="font-display text-2xl text-alive-light">{formatKAS(perSurvivor)}</span>
-                      <span className="text-ash text-xs ml-1">KAS</span>
-                    </div>
-                  </div>
+                  <motion.h1
+                    className={`font-display text-6xl tracking-widest ${
+                      iAmSurvivor
+                        ? 'text-alive-light drop-shadow-[0_0_60px_rgba(16,185,129,0.9)]'
+                        : 'text-blood-light drop-shadow-[0_0_40px_rgba(239,68,68,0.8)]'
+                    }`}
+                    initial={{ y: 30, opacity: 0, scale: 0.5 }}
+                    animate={{ y: 0, opacity: 1, scale: [0.5, 1.1, 1] }}
+                    transition={{ delay: 0.2, duration: 0.5 }}
+                  >
+                    {iAmSurvivor ? 'VICTORY!' : 'DEFEATED'}
+                  </motion.h1>
 
-                  {/* TX Link */}
-                  {room.payoutTxId && room.payoutTxId !== 'payout_failed' && (
-                    <motion.div
+                  {iAmSurvivor && (
+                    <motion.p
+                      className="mt-4 text-alive/80 font-mono text-lg tracking-wider"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ delay: 0.5 }}
-                      className="text-center pt-2"
                     >
-                      <span className="text-[9px] font-mono text-ember/60 uppercase tracking-wider block mb-1">Transaction</span>
-                      <a
-                        href={`${explorerUrl}/txs/${room.payoutTxId}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs font-mono text-gold/80 hover:text-gold transition-colors"
-                      >
-                        {room.payoutTxId.slice(0, 12)}...{room.payoutTxId.slice(-8)} ↗
-                      </a>
-                    </motion.div>
+                      YOU SURVIVED THE CHAMBER
+                    </motion.p>
                   )}
-                </div>
+                </motion.div>
+              )}
 
-                {/* Actions */}
-                <div className="p-4 border-t border-edge/30 space-y-3">
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => { playSound('click'); onDismiss() }}
-                      className="flex-1 py-3.5 px-4 bg-smoke/30 border border-edge/40 rounded-xl font-display text-sm tracking-wider text-ash hover:text-chalk hover:bg-smoke/50 hover:border-edge transition-all"
-                    >
-                      DETAILS
-                    </button>
-                    <button
-                      onClick={() => { playSound('click'); onPlayAgain() }}
-                      className={`
-                        flex-1 py-3.5 px-4 rounded-xl font-display text-sm tracking-wider text-void transition-all
-                        ${iAmSurvivor
-                          ? 'bg-gradient-to-r from-alive to-alive-light hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] hover:scale-[1.02]'
-                          : 'bg-gradient-to-r from-gold to-gold-dark hover:shadow-[0_0_25px_rgba(212,175,55,0.5)] hover:scale-[1.02]'
-                        }
-                      `}
-                    >
-                      PLAY AGAIN
-                    </button>
+              {/* Phase 3: Results Card */}
+              {phase === 'results' && (
+                <motion.div
+                  key="results"
+                  initial={{ opacity: 0, y: 40 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ type: 'spring', damping: 20 }}
+                >
+                  {/* Title */}
+                  <div className="text-center mb-6">
+                    <div className="text-5xl mb-3">{iAmSurvivor ? '🏆' : '💀'}</div>
+                    <h1 className={`font-display text-3xl tracking-[0.2em] ${
+                      iAmSurvivor ? 'text-alive-light' : 'text-blood-light'
+                    }`}>
+                      {iAmSurvivor ? 'VICTORY' : 'ELIMINATED'}
+                    </h1>
+                    <p className={`text-sm font-mono mt-2 ${iAmSurvivor ? 'text-alive/70' : 'text-blood/70'}`}>
+                      {iAmSurvivor ? 'You walked away alive!' : 'The chamber takes another soul...'}
+                    </p>
                   </div>
-                  <button
-                    onClick={() => { playSound('click'); setShowVerifier(true) }}
-                    className="w-full py-2.5 px-4 bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold hover:text-gold-light hover:border-gold/50 hover:bg-gold/20 transition-all flex items-center justify-center gap-2"
-                  >
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                    </svg>
-                    VERIFY FAIRNESS
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
+                  {/* Main Card */}
+                  <div className="bg-gradient-to-b from-noir to-void border border-edge/50 rounded-2xl overflow-hidden shadow-2xl">
+                    {/* Players Row */}
+                    <div className="p-5 bg-smoke/20 border-b border-edge/30">
+                      <div className="flex items-center justify-center gap-2 mb-4">
+                        <span className="text-alive-light font-display text-lg">{survivors.length}</span>
+                        <span className="text-ash text-sm">survived</span>
+                        <span className="text-edge mx-2">•</span>
+                        <span className="text-blood-light font-display text-lg">{eliminated.length}</span>
+                        <span className="text-ash text-sm">eliminated</span>
+                      </div>
+
+                      <div className="flex justify-center items-center gap-2 flex-wrap">
+                        {room.seats
+                          .filter(s => s.walletAddress)
+                          .sort((a, b) => {
+                            const aTime = a.confirmedAt ?? a.index
+                            const bTime = b.confirmedAt ?? b.index
+                            return aTime - bTime
+                          })
+                          .map((seat, i) => {
+                            const isDead = !seat.alive
+                            const isMe = seat.walletAddress === myAddress
+                            return (
+                              <div
+                                key={seat.index}
+                                className={`
+                                  w-10 h-10 rounded-full flex items-center justify-center font-display text-base
+                                  ${isDead
+                                    ? 'bg-blood/20 text-blood-light border-2 border-blood/40'
+                                    : isMe
+                                      ? 'bg-gradient-to-br from-gold to-gold-dark text-void border-2 border-gold shadow-[0_0_15px_rgba(212,175,55,0.5)]'
+                                      : 'bg-gradient-to-br from-alive to-alive-light text-void'
+                                  }
+                                `}
+                              >
+                                {isDead ? '✕' : i + 1}
+                              </div>
+                            )
+                          })}
+                      </div>
+                    </div>
+
+                    {/* Payout Section */}
+                    <div className="p-5 space-y-4">
+                      {/* Winner highlight */}
+                      {iAmSurvivor && (
+                        <div className="relative bg-gradient-to-r from-alive/20 via-alive/10 to-alive/20 border border-alive/40 rounded-xl p-4 text-center">
+                          <span className="text-[10px] font-mono text-alive/80 uppercase tracking-[0.2em] block mb-1">
+                            Your Winnings
+                          </span>
+                          <span className="font-display text-4xl text-alive-light">
+                            {formatKAS(perSurvivor)}
+                          </span>
+                          <span className="text-alive text-lg ml-2">KAS</span>
+                        </div>
+                      )}
+
+                      {/* Stats Grid */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-smoke/30 border border-edge/30 rounded-xl p-3 text-center">
+                          <span className="text-[9px] font-mono text-ember/80 uppercase tracking-wider block mb-1">Total Pot</span>
+                          <span className="font-display text-xl text-gold">{formatKAS(pot, 0)}</span>
+                          <span className="text-ash text-xs ml-1">KAS</span>
+                        </div>
+                        <div className="bg-smoke/30 border border-edge/30 rounded-xl p-3 text-center">
+                          <span className="text-[9px] font-mono text-ember/80 uppercase tracking-wider block mb-1">Per Survivor</span>
+                          <span className="font-display text-xl text-alive-light">{formatKAS(perSurvivor)}</span>
+                          <span className="text-ash text-xs ml-1">KAS</span>
+                        </div>
+                      </div>
+
+                      {/* TX Link */}
+                      {room.payoutTxId && room.payoutTxId !== 'payout_failed' && (
+                        <div className="text-center pt-2">
+                          <span className="text-[9px] font-mono text-ember/60 uppercase tracking-wider block mb-1">Transaction</span>
+                          <a
+                            href={`${explorerUrl}/transactions/${room.payoutTxId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-mono text-gold/80 hover:text-gold transition-colors"
+                          >
+                            {room.payoutTxId.slice(0, 12)}...{room.payoutTxId.slice(-8)} ↗
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
       </div>
 
-      {/* Close button */}
-      {phase === 'results' && (
-        <motion.button
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.8 }}
-          onClick={onDismiss}
-          className="absolute top-4 right-4 p-3 text-ash/50 hover:text-chalk hover:bg-white/5 rounded-full transition-all"
+      {/* FIXED ACTION BUTTONS - Always on top, outside scroll container */}
+      {phase === 'results' && !showVerifier && (
+        <div
+          className="fixed bottom-0 left-0 right-0 z-[100] bg-gradient-to-t from-void via-void to-transparent pt-8 pb-6 px-4"
+          style={{ pointerEvents: 'auto' }}
         >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </motion.button>
+          <div className="max-w-lg mx-auto space-y-3">
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={handleDismiss}
+                onTouchEnd={(e) => { e.preventDefault(); handleDismiss() }}
+                className="flex-1 py-4 px-4 min-h-[56px] bg-smoke/50 border border-edge rounded-xl font-display text-sm tracking-wider text-ash active:bg-smoke transition-colors"
+                style={{ touchAction: 'manipulation' }}
+              >
+                DETAILS
+              </button>
+              <button
+                type="button"
+                onClick={handlePlayAgain}
+                onTouchEnd={(e) => { e.preventDefault(); handlePlayAgain() }}
+                className={`
+                  flex-1 py-4 px-4 min-h-[56px] rounded-xl font-display text-sm tracking-wider text-void transition-colors
+                  ${iAmSurvivor
+                    ? 'bg-gradient-to-r from-alive to-alive-light active:opacity-80'
+                    : 'bg-gradient-to-r from-gold to-gold-dark active:opacity-80'
+                  }
+                `}
+                style={{ touchAction: 'manipulation' }}
+              >
+                PLAY AGAIN
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={handleVerify}
+              onTouchEnd={(e) => { e.preventDefault(); handleVerify() }}
+              className="w-full py-3 px-4 min-h-[52px] bg-gold/10 border border-gold/30 rounded-xl font-display text-sm tracking-wider text-gold active:bg-gold/20 transition-colors flex items-center justify-center gap-2"
+              style={{ touchAction: 'manipulation' }}
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              VERIFY FAIRNESS
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Provably Fair Verifier Modal */}
@@ -562,6 +465,6 @@ export function GameFinishedOverlay({
         onClose={() => setShowVerifier(false)}
         explorerBaseUrl={explorerUrl}
       />
-    </motion.div>
+    </div>
   )
 }

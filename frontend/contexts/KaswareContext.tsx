@@ -3,7 +3,7 @@
 
 'use client'
 
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react'
 import type { KaswareWallet } from '../types/kasware'
 
 interface KaswareContextValue {
@@ -19,6 +19,8 @@ interface KaswareContextValue {
   signMessage: (message: string) => Promise<string>
   sendKaspa: (toAddress: string, amount: number) => Promise<string>
   error: string | null
+  showWalletModal: boolean
+  closeWalletModal: () => void
 }
 
 const KaswareContext = createContext<KaswareContextValue | null>(null)
@@ -31,6 +33,11 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
   const [network, setNetwork] = useState<string | null>(null)
   const [balance, setBalance] = useState<{ total: string; confirmed: string; unconfirmed: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showWalletModal, setShowWalletModal] = useState(false)
+
+  const closeWalletModal = useCallback(() => {
+    setShowWalletModal(false)
+  }, [])
 
   const getKasware = useCallback((): KaswareWallet | null => {
     if (typeof window === 'undefined') return null
@@ -48,8 +55,14 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    // If still no wallet, check if mobile and show modal, otherwise show error
     if (!kasware) {
-      setError('No compatible wallet found. Install Kasware or Kasanova.')
+      const isMobile = typeof window !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+      if (isMobile) {
+        setShowWalletModal(true)
+      } else {
+        setError('No compatible wallet found. Install Kasware browser extension.')
+      }
       return
     }
 
@@ -138,11 +151,30 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         throw new Error('Wallet not connected')
       }
 
-      const txId = await kasware.sendKaspa(toAddress, amount)
-      return txId
+      try {
+        const txId = await kasware.sendKaspa(toAddress, amount)
+        return txId
+      } catch (err: unknown) {
+        // Log full error for debugging wallet API issues
+        console.error('[KASWARE] sendKaspa failed:', {
+          error: err,
+          type: typeof err,
+          keys: err && typeof err === 'object' ? Object.keys(err) : [],
+          toAddress,
+          amount,
+        })
+        // Re-throw the original error so caller can handle it
+        throw err
+      }
     },
     [getKasware, connected]
   )
+
+  // Refs for stable event handler references (prevents memory leaks from stale listeners)
+  const disconnectRef = useRef(disconnect)
+  const refreshBalanceRef = useRef(refreshBalance)
+  disconnectRef.current = disconnect
+  refreshBalanceRef.current = refreshBalance
 
   // Listen for account changes
   useEffect(() => {
@@ -151,10 +183,10 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
 
     const handleAccountsChanged = (accounts: string[]) => {
       if (accounts.length === 0) {
-        disconnect()
+        disconnectRef.current()
       } else {
         setAddress(accounts[0])
-        refreshBalance(true) // silent refresh on account change
+        refreshBalanceRef.current(true) // silent refresh on account change
       }
     }
 
@@ -169,7 +201,7 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       kasware.removeListener('accountsChanged', handleAccountsChanged)
       kasware.removeListener('networkChanged', handleNetworkChanged)
     }
-  }, [getKasware, disconnect, refreshBalance])
+  }, [getKasware]) // Only re-run if kasware instance changes
 
   // Check initial wallet state - with retry for async extension injection
   useEffect(() => {
@@ -240,6 +272,8 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         signMessage,
         sendKaspa,
         error,
+        showWalletModal,
+        closeWalletModal,
       }}
     >
       {children}

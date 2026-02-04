@@ -1,5 +1,5 @@
 // ABOUTME: Bot manager for simulating players in test/dev environments
-// ABOUTME: Adds 5 bot players to fill quick match rooms when enabled
+// ABOUTME: Adds bot players to fill quick match rooms when enabled, supporting multiple simultaneous games
 
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
@@ -15,7 +15,16 @@ import { GameMode } from '../../../shared/index.js'
 const kaspaWasm = require('kaspa-wasm') as any
 
 // Bot identifiers used for deterministic address derivation
-const BOT_IDS = ['bot1', 'bot2', 'bot3', 'bot4', 'bot5']
+// Expanded pool to support multiple simultaneous games
+const BOT_IDS = [
+  'bot1', 'bot2', 'bot3', 'bot4', 'bot5',
+  'bot6', 'bot7', 'bot8', 'bot9', 'bot10',
+  'bot11', 'bot12', 'bot13', 'bot14', 'bot15',
+  'bot16', 'bot17', 'bot18', 'bot19', 'bot20'
+]
+
+// Number of bots needed to fill a room with 1 human
+const BOTS_PER_ROOM = 5
 
 export class BotManager {
   public enabled: boolean
@@ -23,6 +32,8 @@ export class BotManager {
   private activeRooms: Set<string> = new Set()
   private botSeats: Map<string, Set<number>> = new Map() // roomId -> set of bot seat indices
   private botAddresses: string[] = []
+  // Track which bots are currently in active rooms (address -> roomId)
+  private activeBotRooms: Map<string, string> = new Map()
 
   constructor(network: string, enabled: boolean = false) {
     this.network = network
@@ -40,7 +51,7 @@ export class BotManager {
     })
     logger.info('Bot addresses initialized', {
       count: this.botAddresses.length,
-      addresses: this.botAddresses
+      addresses: this.botAddresses.slice(0, 5) // Log first 5 for brevity
     })
   }
 
@@ -52,10 +63,17 @@ export class BotManager {
   }
 
   /**
-   * Get bot addresses
+   * Get all bot addresses
    */
   getBotAddresses(): string[] {
     return this.botAddresses
+  }
+
+  /**
+   * Get available bots (not currently in an active room)
+   */
+  private getAvailableBots(): string[] {
+    return this.botAddresses.filter(addr => !this.activeBotRooms.has(addr))
   }
 
   /**
@@ -73,20 +91,33 @@ export class BotManager {
     this.enabled = false
     this.activeRooms.clear()
     this.botSeats.clear()
+    this.activeBotRooms.clear()
     logger.info('Bot manager stopped')
   }
 
   /**
    * Add bots to queue when a human player joins
    * This fills the queue to reach minPlayers (6)
+   * Only uses bots not currently in active rooms
    */
   addBotsToQueue(mode: GameMode, seatPrice: number): void {
     if (!this.enabled) return
 
-    logger.info('Adding bots to queue', { mode, seatPrice, botCount: this.botAddresses.length })
+    // Get bots that aren't currently in active rooms
+    const availableBots = this.getAvailableBots()
 
-    // Add all 5 bots to the queue
-    for (const botAddress of this.botAddresses) {
+    // Only add up to BOTS_PER_ROOM bots
+    const botsToAdd = availableBots.slice(0, BOTS_PER_ROOM)
+
+    logger.info('Adding bots to queue', {
+      mode,
+      seatPrice,
+      availableBots: availableBots.length,
+      botsToAdd: botsToAdd.length
+    })
+
+    // Add bots to the queue
+    for (const botAddress of botsToAdd) {
       try {
         queueManager.joinQueue(botAddress, mode, seatPrice)
       } catch (err: any) {
@@ -113,6 +144,8 @@ export class BotManager {
     room.seats.forEach((seat) => {
       if (seat.walletAddress && this.isBot(seat.walletAddress)) {
         botSeatIndices.add(seat.index)
+        // Mark this bot as active in this room
+        this.activeBotRooms.set(seat.walletAddress, roomId)
       }
     })
 
@@ -121,7 +154,8 @@ export class BotManager {
     logger.info('Bot manager: Room created', {
       roomId,
       playerCount: playerAddresses.length,
-      botCount: botSeatIndices.size
+      botCount: botSeatIndices.size,
+      totalActiveBotsNow: this.activeBotRooms.size
     })
 
     // Send real bot deposits after a short delay
@@ -159,7 +193,7 @@ export class BotManager {
       const seat = room.seats.find(s => s.index === seatIndex)
       if (seat && !seat.confirmed && seat.walletAddress) {
         try {
-          // Find which bot this is
+          // Find which bot ID this address belongs to
           const botIndex = this.botAddresses.indexOf(seat.walletAddress)
           if (botIndex === -1) {
             logger.warn('Bot address not found in registered addresses', { walletAddress: seat.walletAddress })
@@ -256,18 +290,32 @@ export class BotManager {
   }
 
   /**
-   * Handle room completed
+   * Handle room completed - release bots back to available pool
    */
   handleRoomCompleted(roomId: string): void {
     if (!this.enabled) return
 
+    // Release bots from this room back to available pool
+    const releasedBots: string[] = []
+    for (const [botAddr, activeRoomId] of this.activeBotRooms.entries()) {
+      if (activeRoomId === roomId) {
+        this.activeBotRooms.delete(botAddr)
+        releasedBots.push(botAddr)
+      }
+    }
+
     this.activeRooms.delete(roomId)
     this.botSeats.delete(roomId)
-    logger.debug('Bot manager: Room completed', { roomId })
+
+    logger.debug('Bot manager: Room completed', {
+      roomId,
+      releasedBots: releasedBots.length,
+      availableBotsNow: this.getAvailableBots().length
+    })
   }
 
   /**
-   * Handle turn start - bot auto-pull trigger
+   * Handle turn start - bot signals ready immediately, then auto-pulls trigger
    */
   handleTurnStart(roomId: string, walletAddress: string): void {
     if (!this.enabled) return
@@ -276,6 +324,12 @@ export class BotManager {
     if (!this.isBot(walletAddress)) return
 
     logger.debug('Bot turn detected', { roomId, walletAddress })
+
+    // Signal ready immediately (bots don't need animation time)
+    const readyResult = roomManager.readyForTurn(roomId, walletAddress)
+    if (!readyResult.success) {
+      logger.debug('Bot ready signal failed', { roomId, walletAddress, error: readyResult.error })
+    }
 
     // Auto-pull after a random delay (1-3 seconds) to feel more natural
     const delay = 1000 + Math.random() * 2000
@@ -292,6 +346,13 @@ export class BotManager {
 
     const room = roomManager.getRoom(roomId)
     if (!room) return
+
+    // Re-verify it's still this bot's turn (turn may have advanced during delay)
+    const currentShooter = roomManager.getCurrentShooter(roomId)
+    if (!currentShooter || currentShooter.walletAddress !== walletAddress) {
+      logger.debug('Bot auto-pull skipped - no longer this bot\'s turn', { roomId, walletAddress })
+      return
+    }
 
     try {
       const result = roomManager.pullTrigger(roomId, walletAddress)

@@ -4,7 +4,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 import { useKasware } from '../hooks/useKasware'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useKNS } from '../hooks/useKNS'
@@ -14,8 +14,17 @@ import { Button } from './ui/Button'
 import { formatAddress, formatBalance } from '../lib/format'
 import config from '../lib/config'
 
+function getSectionName(pathname: string): string {
+  if (pathname === '/') return ''
+  if (pathname === '/lobby') return 'Lobby'
+  if (pathname.startsWith('/room/')) return 'Game'
+  return ''
+}
+
 export function Header() {
   const router = useRouter()
+  const pathname = usePathname()
+  const sectionName = getSectionName(pathname)
   const [liveUsers, setLiveUsers] = useState(0)
   const ws = useWebSocket(config.ws.url)
   const { play } = useSound()
@@ -79,6 +88,11 @@ export function Header() {
               </div>
             </button>
 
+            {/* Mobile: Section name */}
+            {sectionName && (
+              <span className="sm:hidden font-display text-lg tracking-wide text-chalk">{sectionName}</span>
+            )}
+
             {liveUsers > 0 && (
               <div className="hidden md:flex items-center gap-2 text-xs text-ember bg-smoke/50 border border-edge px-3 py-1.5 rounded-full">
                 <div className="relative">
@@ -92,10 +106,19 @@ export function Header() {
           </div>
 
           {/* Wallet Connection */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {connected && address ? (
-              <div className="flex items-center gap-3">
-                {/* Balance display */}
+              <div className="flex items-center gap-2 sm:gap-3">
+                {/* Mobile balance display - compact */}
+                {balance && (
+                  <div className="flex sm:hidden items-center gap-1.5 bg-smoke/50 border border-edge rounded-lg px-3 py-1.5">
+                    <span className="text-sm text-chalk font-mono">
+                      {formatBalance(Number(balance.total) || (Number(balance.confirmed) + Number(balance.unconfirmed)))}
+                    </span>
+                    <span className="text-xs text-ash">KAS</span>
+                  </div>
+                )}
+                {/* Desktop balance display */}
                 <div className="hidden sm:flex flex-col items-end bg-smoke/50 border border-edge rounded-lg px-4 py-2">
                   <div className="flex items-center gap-2">
                     <span className={`font-mono text-sm ${domain ? 'text-gold font-semibold' : 'text-gold'}`}>

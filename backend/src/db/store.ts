@@ -132,6 +132,10 @@ class Store {
       fields.push('settlement_block_height = ?')
       values.push(updates.settlementBlockHeight)
     }
+    if (updates.settlementBlockHash !== undefined) {
+      fields.push('settlement_block_hash = ?')
+      values.push(updates.settlementBlockHash)
+    }
     if (updates.payoutTxId !== undefined) {
       fields.push('payout_tx_id = ?')
       values.push(updates.payoutTxId)
@@ -439,6 +443,7 @@ class Store {
       serverSeed: roomRow.server_seed || null,
       lockHeight: roomRow.lock_height || null,
       settlementBlockHeight: roomRow.settlement_block_height || null,
+      settlementBlockHash: roomRow.settlement_block_hash || null,
       payoutTxId: roomRow.payout_tx_id || null,
       refundTxIds: roomRow.refund_tx_ids ? JSON.parse(roomRow.refund_tx_ids) : undefined,
       currentTurnSeatIndex: roomRow.current_turn_seat_index ?? null,

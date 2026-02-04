@@ -11,6 +11,7 @@ vi.mock('./room-manager.js', () => ({
   roomManager: {
     createRoom: vi.fn(),
     joinRoom: vi.fn(),
+    getActiveRoomForUser: vi.fn().mockReturnValue(undefined), // User not in any room by default
   },
 }))
 
@@ -53,6 +54,7 @@ describe('QueueManager', () => {
       depositAddress: 'kaspatest:addr',
       lockHeight: null,
       settlementBlockHeight: null,
+      settlementBlockHash: null,
       serverCommit: 'commit',
       serverSeed: null,
       houseCutPercent: 5,
@@ -114,9 +116,11 @@ describe('QueueManager', () => {
       queueManager.joinQueue('kaspatest:wallet2', GameMode.REGULAR, 10)
 
       // Players are shuffled before joining, so check both are present regardless of order
+      // Third param is addBots (false since wantsBots defaults to false)
       expect(callback).toHaveBeenCalledWith(
         'auto-room-123',
-        expect.arrayContaining(['kaspatest:wallet1', 'kaspatest:wallet2'])
+        expect.arrayContaining(['kaspatest:wallet1', 'kaspatest:wallet2']),
+        false
       )
       const calledWith = callback.mock.calls[0][1]
       expect(calledWith).toHaveLength(2)

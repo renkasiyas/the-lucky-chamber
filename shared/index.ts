@@ -62,6 +62,7 @@ export interface Room {
   depositAddress: string // Single address for all deposits
   lockHeight: number | null // Kaspa block height when locked
   settlementBlockHeight: number | null
+  settlementBlockHash: string | null // Block hash at settlementBlockHeight (for RNG verification)
   serverCommit: string // SHA256(server_seed)
   serverSeed: string | null // Revealed after game
   houseCutPercent: number
@@ -97,6 +98,7 @@ export interface Round {
 
 export interface Payout {
   roomId: string
+  /** @deprecated Redundant with `address` - both store wallet address. Kept for DB compatibility. */
   userId: string
   address: string
   amount: number
@@ -113,15 +115,24 @@ export const WSEvent = {
   JOIN_QUEUE: 'join_queue',
   LEAVE_QUEUE: 'leave_queue',
   SUBMIT_CLIENT_SEED: 'submit_client_seed',
+  READY_FOR_TURN: 'ready_for_turn', // Client signals animations done, ready for turn timer
   PULL_TRIGGER: 'pull_trigger',
+  CONFIRM_RESULTS_SHOWN: 'confirm_results_shown', // Client signals victory modal is displayed
 
   // Server -> Client
   ROOM_UPDATE: 'room:update',
+  ROOM_ASSIGNED: 'room:assigned', // Player assigned to room from queue
   GAME_START: 'game:start',
   TURN_START: 'turn:start',
+  TURN_TIMER_START: 'turn:timer_start', // Server signals pull timer started (for countdown sync)
   ROUND_RESULT: 'round:result',
   GAME_END: 'game:end',
+  PAYOUT_SENT: 'payout:sent', // Server signals payout transaction was sent
   RNG_REVEAL: 'rng:reveal',
+  PLAYER_FORFEIT: 'player:forfeit', // Player left during PLAYING state
+  QUEUE_JOINED: 'queue:joined', // Confirmation of queue join
+  QUEUE_LEFT: 'queue:left', // Confirmation of queue leave
+  QUEUE_UPDATE: 'queue:update', // Queue count update broadcast
   CONNECTION_COUNT: 'connection:count',
   ERROR: 'error',
 } as const
@@ -143,6 +154,7 @@ export interface JoinQueuePayload {
   mode: GameMode
   seatPrice?: number // Only for REGULAR mode
   walletAddress: string
+  wantsBots?: boolean // Whether user wants bots to fill their game
 }
 
 export interface LeaveQueuePayload {
@@ -156,7 +168,18 @@ export interface SubmitClientSeedPayload {
   clientSeed: string
 }
 
+export interface ReadyForTurnPayload {
+  roomId: string
+  walletAddress: string
+  turnId?: number // Optional: validates signal is for current turn (prevents stale events)
+}
+
 export interface PullTriggerPayload {
+  roomId: string
+  walletAddress: string
+}
+
+export interface ConfirmResultsShownPayload {
   roomId: string
   walletAddress: string
 }
@@ -166,6 +189,13 @@ export interface TurnStartPayload {
   seatIndex: number
   walletAddress: string | null
   roundIndex: number
+}
+
+export interface TurnTimerStartPayload {
+  roomId: string
+  turnId: number // Monotonic counter per room, prevents stale events
+  deadline: number // Timestamp when timer expires (Date.now() + timeoutMs)
+  timeoutMs: number // Timeout duration in milliseconds
 }
 
 export interface RoomUpdatePayload {
@@ -191,6 +221,11 @@ export interface GameEndPayload {
   roomId: string
   survivors: number[] // Seat indices
   payouts: Payout[]
+  payoutTxId: string // May be 'pending' until payout is sent
+}
+
+export interface PayoutSentPayload {
+  roomId: string
   payoutTxId: string
 }
 
@@ -205,6 +240,30 @@ export interface RNGRevealPayload {
 export interface ErrorPayload {
   message: string
   code?: string
+}
+
+export interface RoomAssignedPayload {
+  roomId: string
+}
+
+export interface PlayerForfeitPayload {
+  roomId: string
+  seatIndex: number
+  walletAddress: string
+}
+
+export interface QueueJoinedPayload {
+  mode: GameMode
+  seatPrice?: number
+}
+
+export interface QueueLeftPayload {
+  // Empty payload
+}
+
+export interface QueueUpdatePayload {
+  queueKey: string
+  count: number
 }
 
 // ============================================================================

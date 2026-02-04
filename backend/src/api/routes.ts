@@ -131,3 +131,10 @@ router.get('/refunds/:walletAddress', (req: Request, res: Response) => {
   const refunds = store.getRefundsByWallet(walletAddress)
   res.json({ refunds })
 })
+
+// Get active room for a wallet address (if any)
+router.get('/users/:walletAddress/active-room', (req: Request, res: Response) => {
+  const { walletAddress } = req.params
+  const room = roomManager.getActiveRoomForUser(walletAddress)
+  res.json({ room: room || null })
+})

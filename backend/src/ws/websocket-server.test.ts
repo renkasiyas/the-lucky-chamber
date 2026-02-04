@@ -58,6 +58,7 @@ describe('WSServer', () => {
     depositAddress: 'kaspatest:deposit123',
     lockHeight: null,
     settlementBlockHeight: null,
+    settlementBlockHash: null,
     serverCommit: 'commit123',
     serverSeed: null,
     houseCutPercent: 5,
@@ -301,7 +302,7 @@ describe('WSServer', () => {
 
       const msg = await waitForMessage(ws)
 
-      expect(queueManager.joinQueue).toHaveBeenCalledWith('kaspatest:wallet1', GameMode.REGULAR, 10)
+      expect(queueManager.joinQueue).toHaveBeenCalledWith('kaspatest:wallet1', GameMode.REGULAR, 10, false)
       expect(msg.event).toBe('queue:joined')
 
       ws.close()

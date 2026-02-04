@@ -15,6 +15,13 @@ interface VerificationResult {
   computedCommitment: string
 }
 
+interface RoundVerification {
+  roundIndex: number
+  valid: boolean
+  computedRandomness: string
+  expectedRandomness: string
+}
+
 interface ProvablyFairModalProps {
   room: Room
   isOpen: boolean
@@ -30,7 +37,9 @@ export function ProvablyFairModal({
 }: ProvablyFairModalProps) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null)
+  const [roundVerifications, setRoundVerifications] = useState<RoundVerification[]>([])
   const [verifying, setVerifying] = useState(false)
+  const [verifyingRounds, setVerifyingRounds] = useState(false)
   const { play } = useSound()
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -47,6 +56,25 @@ export function ProvablyFairModal({
   }, [isOpen, handleKeyDown])
 
   const [mounted, setMounted] = useState(false)
+
+  // Compute HMAC-SHA256
+  const hmacSha256 = useCallback(async (key: string, message: string): Promise<string> => {
+    const encoder = new TextEncoder()
+    const keyData = encoder.encode(key)
+    const messageData = encoder.encode(message)
+
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw',
+      keyData,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    )
+
+    const signature = await crypto.subtle.sign('HMAC', cryptoKey, messageData)
+    const hashArray = Array.from(new Uint8Array(signature))
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+  }, [])
 
   const verifyCommitment = useCallback(async () => {
     if (!room.serverSeed) return
@@ -69,11 +97,60 @@ export function ProvablyFairModal({
     }
   }, [room.serverSeed, room.serverCommit])
 
+  // Verify all rounds using HMAC-SHA256
+  const verifyRounds = useCallback(async () => {
+    if (!room.serverSeed || !room.settlementBlockHash || room.rounds.length === 0) return
+
+    setVerifyingRounds(true)
+    try {
+      // Get client seeds and sort lexicographically (matching backend rng.ts)
+      const clientSeeds = room.seats
+        .filter(s => s.clientSeed)
+        .map(s => s.clientSeed!)
+        .sort() // Lexicographic sort to match backend
+
+      const results: RoundVerification[] = []
+
+      for (const round of room.rounds) {
+        // Backend computes: HMAC_SHA256(serverSeed, [...sortedSeeds, roomId, roundIndex.toString(), blockHash].join('|'))
+        // Note: Backend uses '|' as delimiter between all parts
+        const message = [
+          ...clientSeeds,
+          room.id,
+          round.index.toString(),
+          room.settlementBlockHash,
+        ].join('|')
+        const computedRandomness = await hmacSha256(room.serverSeed!, message)
+
+        results.push({
+          roundIndex: round.index,
+          valid: computedRandomness === round.randomness,
+          computedRandomness,
+          expectedRandomness: round.randomness,
+        })
+      }
+
+      setRoundVerifications(results)
+    } catch (err) {
+      console.error('Round verification failed:', err)
+      setRoundVerifications([])
+    } finally {
+      setVerifyingRounds(false)
+    }
+  }, [room.serverSeed, room.settlementBlockHash, room.rounds, room.seats, room.id, hmacSha256])
+
   useEffect(() => {
     if (isOpen && room.serverSeed && !verificationResult) {
       verifyCommitment()
     }
   }, [isOpen, room.serverSeed, verificationResult, verifyCommitment])
+
+  // Auto-verify rounds when modal opens and data is available
+  useEffect(() => {
+    if (isOpen && room.serverSeed && room.settlementBlockHash && room.rounds.length > 0 && roundVerifications.length === 0) {
+      verifyRounds()
+    }
+  }, [isOpen, room.serverSeed, room.settlementBlockHash, room.rounds.length, roundVerifications.length, verifyRounds])
 
   useEffect(() => {
     setMounted(true)
@@ -246,12 +323,23 @@ export function ProvablyFairModal({
             <div className="space-y-2">
               <h3 className="text-sm font-display tracking-wide text-chalk">Settlement Block</h3>
               <p className="text-xs text-ember">
-                Block DAA score used for randomness entropy.
+                Block DAA score and hash used for randomness entropy.
               </p>
-              <div className="bg-smoke border border-edge rounded-lg p-3">
-                <span className="font-mono text-sm text-chalk">
-                  {room.settlementBlockHeight.toLocaleString()}
-                </span>
+              <div className="bg-smoke border border-edge rounded-lg p-3 space-y-2">
+                <div>
+                  <span className="text-xs text-ember">Height: </span>
+                  <span className="font-mono text-sm text-chalk">
+                    {room.settlementBlockHeight.toLocaleString()}
+                  </span>
+                </div>
+                {room.settlementBlockHash && (
+                  <div>
+                    <span className="text-xs text-ember">Hash: </span>
+                    <code className="font-mono text-xs text-chalk break-all">
+                      {room.settlementBlockHash}
+                    </code>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -259,49 +347,99 @@ export function ProvablyFairModal({
           {/* Round Results (if game finished) */}
           {room.rounds.length > 0 && (
             <div className="space-y-2">
-              <h3 className="text-sm font-display tracking-wide text-chalk">Round Results</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-display tracking-wide text-chalk">Round Results</h3>
+                {verifyingRounds ? (
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs text-ash">Verifying...</span>
+                  </div>
+                ) : roundVerifications.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    {roundVerifications.every(r => r.valid) ? (
+                      <>
+                        <svg className="w-4 h-4 text-alive-light" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-xs text-alive-light">All verified</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-4 h-4 text-blood-light" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-xs text-blood-light">Mismatch found</span>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
               <p className="text-xs text-ember">
                 Each round&apos;s randomness and outcome.
               </p>
               <div className="bg-smoke border border-edge rounded-lg p-3 space-y-3">
-                {room.rounds.map((round: Round) => (
-                  <div
-                    key={round.index}
-                    className={`
-                      p-2 rounded-lg border
-                      ${round.died
-                        ? 'border-blood/30 bg-blood/10'
-                        : 'border-edge'
-                      }
-                    `.trim().replace(/\s+/g, ' ')}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-display tracking-wide text-chalk">
-                        Round {round.index + 1}
-                      </span>
-                      <span
-                        className={`
-                          text-xs font-display tracking-wider
-                          ${round.died ? 'text-blood-light' : 'text-alive-light'}
-                        `}
-                      >
-                        {round.died ? 'BANG' : 'Click'}
-                      </span>
-                    </div>
-                    <div className="text-xs text-ember">
-                      Shooter: Seat {round.shooterSeatIndex + 1} →
-                      Target: Seat {round.targetSeatIndex + 1}
-                    </div>
-                    {showAdvanced && (
-                      <div className="mt-2 pt-2 border-t border-edge">
-                        <div className="text-xs text-ember">Randomness:</div>
-                        <code className="font-mono text-xs text-gold break-all">
-                          {round.randomness}
-                        </code>
+                {room.rounds.map((round: Round) => {
+                  const verification = roundVerifications.find(r => r.roundIndex === round.index)
+                  return (
+                    <div
+                      key={round.index}
+                      className={`
+                        p-2 rounded-lg border
+                        ${round.died
+                          ? 'border-blood/30 bg-blood/10'
+                          : 'border-edge'
+                        }
+                      `.trim().replace(/\s+/g, ' ')}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-display tracking-wide text-chalk">
+                            Round {round.index + 1}
+                          </span>
+                          {verification && (
+                            verification.valid ? (
+                              <svg className="w-4 h-4 text-alive-light" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                            ) : (
+                              <svg className="w-4 h-4 text-blood-light" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                              </svg>
+                            )
+                          )}
+                        </div>
+                        <span
+                          className={`
+                            text-xs font-display tracking-wider
+                            ${round.died ? 'text-blood-light' : 'text-alive-light'}
+                          `}
+                        >
+                          {round.died ? 'BANG' : 'Click'}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <div className="text-xs text-ember">
+                        Shooter: Seat {round.shooterSeatIndex + 1} →
+                        Target: Seat {round.targetSeatIndex + 1}
+                      </div>
+                      {showAdvanced && (
+                        <div className="mt-2 pt-2 border-t border-edge space-y-1">
+                          <div className="text-xs text-ember">Randomness:</div>
+                          <code className="font-mono text-xs text-gold break-all">
+                            {round.randomness}
+                          </code>
+                          {verification && !verification.valid && (
+                            <div className="mt-1">
+                              <div className="text-xs text-blood-light">Computed:</div>
+                              <code className="font-mono text-xs text-blood-light break-all">
+                                {verification.computedRandomness}
+                              </code>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -339,16 +477,19 @@ export function ProvablyFairModal({
                   Verify the server commit matches SHA256 of the revealed server seed.
                 </li>
                 <li>
-                  Concatenate: server_seed + all client_seeds + room_id + round + block_hash
+                  Sort all client seeds lexicographically (alphabetically).
                 </li>
                 <li>
-                  Compute HMAC-SHA256 of the concatenated string.
+                  Create message: join [client_seeds..., room_id, round_index, block_hash] with &apos;|&apos; delimiter.
                 </li>
                 <li>
-                  The bullet position is: (first 4 bytes as uint32) % 6
+                  Compute HMAC-SHA256 using server_seed as key and message from step 3.
                 </li>
                 <li>
-                  If the shooter&apos;s position matches, the chamber fires.
+                  The bullet position is: (first 4 bytes as big-endian uint32) % 6
+                </li>
+                <li>
+                  If the shooter&apos;s seat index matches the bullet position, the chamber fires.
                 </li>
               </ol>
             </div>

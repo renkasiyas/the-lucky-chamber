@@ -45,13 +45,21 @@ function getEnvBoolean(key: string, defaultValue: boolean): boolean {
   return value.toLowerCase() === 'true' || value === '1'
 }
 
+// Game timing configuration (milliseconds)
+export const gameTimings = {
+  // Time allowed for player to signal ready (animations to complete)
+  readyTimeoutMs: getEnvNumber('READY_TIMEOUT_MS', 60000), // 60 seconds
+  // Time allowed for player to pull trigger after ready
+  pullTimeoutMs: getEnvNumber('PULL_TIMEOUT_MS', 30000), // 30 seconds
+}
+
 export const config: Config & { botsEnabled: boolean } = {
   network: getEnv('NETWORK', Network.TESTNET) as Network,
   rpcUrl: '', // Not used - Resolver auto-discovers nodes
   walletMnemonic: getEnv('WALLET_MNEMONIC'),
   treasuryAddress: getEnv('TREASURY_ADDRESS'),
   houseCutPercent: getEnvNumber('HOUSE_CUT_PERCENT', 5),
-  port: getEnvNumber('PORT', 3001),
+  port: getEnvNumber('PORT', 4201),
   botsEnabled: getEnvBoolean('BOTS_ENABLED', false),
 }
 

@@ -12,7 +12,9 @@ import {
   type GameStartPayload,
   type RoundResultPayload,
   type GameEndPayload,
+  type PayoutSentPayload,
   type RNGRevealPayload,
+  type TurnTimerStartPayload,
   SOMPI_PER_KAS,
 } from '../../../shared/index.js'
 import { store } from '../db/store.js'
@@ -20,7 +22,7 @@ import { walletManager } from '../crypto/wallet.js'
 import { RNGSystem } from '../crypto/rng.js'
 import { kaspaClient } from '../crypto/kaspa-client.js'
 import { knsClient } from '../crypto/kns-client.js'
-import { config } from '../config.js'
+import { config, gameTimings } from '../config.js'
 import type { WSServer } from '../ws/websocket-server.js'
 import { logger, logRoomEvent, logUserAction } from '../utils/logger.js'
 
@@ -39,7 +41,18 @@ interface PendingGameState {
   chambers: boolean[]
   roundIndex: number
   currentShooterIndex: number
+  turnId: number // Monotonic counter per turn, prevents stale events from previous turns
+  readyReceived: boolean // Flag set if ready_for_turn arrives before resolver is installed
+  resolveReady?: () => void // Resolves when player signals ready for turn
+  resolveWait?: () => void // Resolves when player pulls trigger
+}
+
+// Pending payout state - waits for frontend to confirm results are shown
+interface PendingPayoutState {
+  roomId: string
+  confirmedClients: Set<string> // Wallet addresses that confirmed
   resolveWait?: () => void
+  timeoutHandle?: NodeJS.Timeout
 }
 
 export class RoomManager {
@@ -48,6 +61,8 @@ export class RoomManager {
   private onRoomCompleted: RoomCompletedCallback | null = null
   private onTurnStart: TurnStartCallback | null = null
   private pendingGames: Map<string, PendingGameState> = new Map() // roomId -> pending state
+  private pendingPayouts: Map<string, PendingPayoutState> = new Map() // roomId -> pending payout state
+  private depositLocks: Set<string> = new Set() // roomId:seatIndex -> prevents concurrent confirmDeposit
 
   /**
    * Set callback for when a room is completed (settled or aborted)
@@ -61,6 +76,29 @@ export class RoomManager {
    */
   setTurnStartCallback(callback: TurnStartCallback): void {
     this.onTurnStart = callback
+  }
+
+  /**
+   * Handle client confirming they've shown the results modal
+   * When enough clients confirm (or timeout), payout is sent
+   */
+  confirmResultsShown(roomId: string, walletAddress: string): void {
+    const pending = this.pendingPayouts.get(roomId)
+    if (!pending) {
+      logger.debug('No pending payout for room, ignoring confirmation', { roomId, walletAddress })
+      return
+    }
+
+    pending.confirmedClients.add(walletAddress)
+    logRoomEvent('Client confirmed results shown', roomId, {
+      walletAddress,
+      confirmedCount: pending.confirmedClients.size
+    })
+
+    // Trigger the waiting payout to proceed
+    if (pending.resolveWait) {
+      pending.resolveWait()
+    }
   }
 
   /**
@@ -87,6 +125,45 @@ export class RoomManager {
     // Trigger the waiting game loop to continue
     if (pending.resolveWait) {
       pending.resolveWait()
+      pending.resolveWait = undefined // Clear to prevent reuse
+    }
+
+    return { success: true }
+  }
+
+  /**
+   * Handle ready_for_turn signal from a player
+   * This signals the backend to start the 30-second pull timer
+   */
+  readyForTurn(roomId: string, walletAddress: string, turnId?: number): { success: boolean; error?: string } {
+    const pending = this.pendingGames.get(roomId)
+    if (!pending) {
+      return { success: false, error: 'No pending game for this room' }
+    }
+
+    // If turnId provided, validate it matches current turn (prevents stale events)
+    if (turnId !== undefined && turnId !== pending.turnId) {
+      return { success: false, error: 'Stale turn ID' }
+    }
+
+    const room = store.getRoom(roomId)
+    if (!room) {
+      return { success: false, error: 'Room not found' }
+    }
+
+    // Check if it's this player's turn
+    const currentShooter = room.seats.find(s => s.index === pending.currentShooterIndex)
+    if (!currentShooter || currentShooter.walletAddress !== walletAddress) {
+      return { success: false, error: 'Not your turn' }
+    }
+
+    // Mark ready received - handles race condition where signal arrives before resolver
+    pending.readyReceived = true
+
+    // Signal that player is ready - starts the pull timer
+    if (pending.resolveReady) {
+      pending.resolveReady()
+      pending.resolveReady = undefined // Clear to prevent reuse
     }
 
     return { success: true }
@@ -107,6 +184,15 @@ export class RoomManager {
     if (!seat) return null
 
     return { seatIndex: pending.currentShooterIndex, walletAddress: seat.walletAddress }
+  }
+
+  /**
+   * Get the current turn ID for a room (for validating stale events)
+   */
+  getCurrentTurnId(roomId: string): number | null {
+    const pending = this.pendingGames.get(roomId)
+    if (!pending) return null
+    return pending.turnId
   }
 
   /**
@@ -161,6 +247,7 @@ export class RoomManager {
       depositAddress,
       lockHeight: null,
       settlementBlockHeight: null,
+      settlementBlockHash: null,
       serverCommit,
       serverSeed: null, // SECURITY: Don't expose until game ends!
       houseCutPercent: config.houseCutPercent,
@@ -200,6 +287,16 @@ export class RoomManager {
     // Check if wallet already in room
     if (room.seats.some((s) => s.walletAddress === walletAddress)) {
       throw new Error('Wallet already in room')
+    }
+
+    // Check if user is already in another active room (bots are exempt)
+    const botManager = (global as any).botManager
+    const isBot = botManager?.isBot?.(walletAddress) ?? false
+    if (!isBot) {
+      const existingRoom = this.getActiveRoomForUser(walletAddress)
+      if (existingRoom && existingRoom.id !== roomId) {
+        throw new Error(`Already in active room: ${existingRoom.id}`)
+      }
     }
 
     const seatIndex = room.seats.length
@@ -320,7 +417,7 @@ export class RoomManager {
 
       // Broadcast the forfeit
       if (this.wsServer) {
-        this.wsServer.broadcastToRoom(roomId, 'player:forfeit', {
+        this.wsServer.broadcastToRoom(roomId, WSEvent.PLAYER_FORFEIT, {
           roomId,
           seatIndex: seat.index,
           walletAddress
@@ -342,47 +439,65 @@ export class RoomManager {
 
   /**
    * Mark a seat as funded (called by transaction monitor)
+   * Uses a lock to prevent race conditions from concurrent confirmations
    */
   confirmDeposit(roomId: string, seatIndex: number, txId: string, amount: number): void {
-    const room = store.getRoom(roomId)
-    if (!room) throw new Error('Room not found')
+    // Lock key for this specific seat
+    const lockKey = `${roomId}:${seatIndex}`
 
-    // Only confirm deposits in FUNDING state
-    if (room.state !== RoomState.FUNDING) {
-      logger.warn('Cannot confirm deposit - room not in FUNDING state', {
-        roomId,
-        currentState: room.state,
-        seatIndex
-      })
+    // Check for concurrent processing (prevents race condition)
+    if (this.depositLocks.has(lockKey)) {
+      logger.debug('Deposit confirmation already in progress, skipping', { roomId, seatIndex })
       return
     }
 
-    // Use .find() since seatIndex is the stable seat.index, not array position
-    const seat = room.seats.find(s => s.index === seatIndex)
-    if (!seat) throw new Error('Seat not found')
+    // Acquire lock
+    this.depositLocks.add(lockKey)
 
-    // Idempotent: skip if already confirmed (prevents race conditions)
-    if (seat.confirmed) {
-      logger.debug('Seat already confirmed, skipping', { roomId, seatIndex, existingTxId: seat.depositTxId })
-      return
+    try {
+      const room = store.getRoom(roomId)
+      if (!room) throw new Error('Room not found')
+
+      // Only confirm deposits in FUNDING state
+      if (room.state !== RoomState.FUNDING) {
+        logger.warn('Cannot confirm deposit - room not in FUNDING state', {
+          roomId,
+          currentState: room.state,
+          seatIndex
+        })
+        return
+      }
+
+      // Use .find() since seatIndex is the stable seat.index, not array position
+      const seat = room.seats.find(s => s.index === seatIndex)
+      if (!seat) throw new Error('Seat not found')
+
+      // Idempotent: skip if already confirmed
+      if (seat.confirmed) {
+        logger.debug('Seat already confirmed, skipping', { roomId, seatIndex, existingTxId: seat.depositTxId })
+        return
+      }
+
+      seat.depositTxId = txId
+      seat.amount = amount
+      seat.confirmed = true
+      seat.confirmedAt = Date.now()
+
+      store.updateSeat(roomId, seatIndex, seat)
+      logRoomEvent('Deposit confirmed', roomId, { seatIndex, amount, txId })
+
+      // Broadcast the update so frontend sees the confirmation
+      const updatedRoom = store.getRoom(roomId)
+      if (this.wsServer && updatedRoom) {
+        this.wsServer.broadcastToRoom(roomId, WSEvent.ROOM_UPDATE, { room: updatedRoom })
+      }
+
+      // Check if all seats are funded
+      this.checkAndLockRoom(roomId)
+    } finally {
+      // Release lock
+      this.depositLocks.delete(lockKey)
     }
-
-    seat.depositTxId = txId
-    seat.amount = amount
-    seat.confirmed = true
-    seat.confirmedAt = Date.now()
-
-    store.updateSeat(roomId, seatIndex, seat)
-    logRoomEvent('Deposit confirmed', roomId, { seatIndex, amount, txId })
-
-    // Broadcast the update so frontend sees the confirmation
-    const updatedRoom = store.getRoom(roomId)
-    if (this.wsServer && updatedRoom) {
-      this.wsServer.broadcastToRoom(roomId, WSEvent.ROOM_UPDATE, { room: updatedRoom })
-    }
-
-    // Check if all seats are funded
-    this.checkAndLockRoom(roomId)
   }
 
   /**
@@ -544,6 +659,10 @@ export class RoomManager {
 
       blockHash = await kaspaClient.getBlockHashByHeight(BigInt(room.settlementBlockHeight))
       logRoomEvent('Settlement block hash retrieved', roomId, { blockHash })
+
+      // Store block hash in room for frontend RNG verification
+      room.settlementBlockHash = blockHash
+      store.updateRoom(roomId, { settlementBlockHash: blockHash })
     } catch (error) {
       logger.error(`Failed to fetch settlement block hash, aborting game`, { error, roomId })
       await this.abortRoom(roomId)
@@ -587,6 +706,8 @@ export class RoomManager {
 
     // Track previous shooter's seat.index for proper rotation after deaths
     let lastShooterSeatIndex: number | null = null
+    // Monotonic turn counter to prevent stale events from previous turns
+    let turnId = 0
 
     while (true) {
       const aliveCount = room.seats.filter((s) => s.alive).length
@@ -635,6 +756,7 @@ export class RoomManager {
       lastShooterSeatIndex = shooterSeatIndex
 
       // Store pending game state for trigger pull
+      const currentTurnId = ++turnId
       const pendingState: PendingGameState = {
         roomId,
         blockHash,
@@ -643,6 +765,8 @@ export class RoomManager {
         chambers,
         roundIndex,
         currentShooterIndex: shooterSeatIndex,
+        turnId: currentTurnId,
+        readyReceived: false, // Will be set true if ready signal arrives early
       }
       this.pendingGames.set(roomId, pendingState)
 
@@ -664,10 +788,51 @@ export class RoomManager {
         this.onTurnStart(roomId, shooter.walletAddress)
       }
 
-      logRoomEvent('Waiting for trigger pull', roomId, { seatIndex: shooterSeatIndex, roundIndex })
+      logRoomEvent('Waiting for player ready signal', roomId, { seatIndex: shooterSeatIndex, roundIndex, turnId: currentTurnId })
 
-      // Wait for player to pull trigger (with timeout)
-      const pullTimeout = 30000 // 30 seconds to pull trigger
+      // STEP 1: Wait for player to signal they're ready (animations complete)
+      // This allows frontend to finish animating previous rounds before timer starts
+      const { readyTimeoutMs, pullTimeoutMs } = gameTimings
+      let playerReady = pendingState.readyReceived // Check if ready signal arrived early
+
+      if (!playerReady) {
+        try {
+          playerReady = await Promise.race([
+            new Promise<boolean>((resolve) => {
+              pendingState.resolveReady = () => resolve(true)
+              // Check again after installing resolver (race condition window)
+              if (pendingState.readyReceived) resolve(true)
+            }),
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), readyTimeoutMs)
+            }),
+          ])
+        } catch (error) {
+          logger.error('Error waiting for ready signal', { roomId, error })
+        }
+        // Clear resolver after use
+        pendingState.resolveReady = undefined
+      }
+
+      if (!playerReady) {
+        logRoomEvent('Ready signal timeout, starting timer anyway', roomId, { seatIndex: shooterSeatIndex })
+      } else {
+        logRoomEvent('Player ready, starting pull timer', roomId, { seatIndex: shooterSeatIndex })
+      }
+
+      // Broadcast TURN_TIMER_START so frontend can sync countdown with server
+      const timerDeadline = Date.now() + pullTimeoutMs
+      if (this.wsServer) {
+        const timerPayload: TurnTimerStartPayload = {
+          roomId,
+          turnId: currentTurnId,
+          deadline: timerDeadline,
+          timeoutMs: pullTimeoutMs,
+        }
+        this.wsServer.broadcastToRoom(roomId, WSEvent.TURN_TIMER_START, timerPayload)
+      }
+
+      // STEP 2: Wait for player to pull trigger (with timeout)
       let triggerPulled = false
 
       try {
@@ -676,12 +841,14 @@ export class RoomManager {
             pendingState.resolveWait = () => resolve(true)
           }),
           new Promise<boolean>((resolve) => {
-            setTimeout(() => resolve(false), pullTimeout)
+            setTimeout(() => resolve(false), pullTimeoutMs)
           }),
         ])
       } catch (error) {
         logger.error('Error waiting for trigger pull', { roomId, error })
       }
+      // Clear resolver after use
+      pendingState.resolveWait = undefined
 
       // If timeout or error, auto-pull for bots or afk players
       if (!triggerPulled) {
@@ -794,10 +961,17 @@ export class RoomManager {
   /**
    * Settle game and calculate payouts
    * All monetary calculations done in sompi (integers) to avoid floating point errors
+   * Payout is delayed until at least one frontend confirms they showed the results modal
    */
   private async settleGame(roomId: string, blockHash: string): Promise<void> {
     const room = store.getRoom(roomId)
     if (!room) return
+
+    // Prevent re-entry if already settled
+    if (room.state === RoomState.SETTLED) {
+      logger.warn('settleGame called on already-settled room', { roomId })
+      return
+    }
 
     const survivors = room.seats.filter((s) => s.alive)
 
@@ -836,35 +1010,20 @@ export class RoomManager {
       })
     })
 
-    // Send actual payout transaction
-    let payoutTxId = 'payout_failed'
-    try {
-      const { payoutService } = await import('../crypto/services/payout-service.js')
-      payoutTxId = await payoutService.sendPayout(roomId)
-      logRoomEvent('Payout transaction sent', roomId, { txId: payoutTxId })
-    } catch (error: any) {
-      logger.error('Failed to send payout transaction', {
-        roomId,
-        error: error?.message || String(error),
-        stack: error?.stack
-      })
-    }
-
+    // Mark room as settled before sending GAME_END (payoutTxId pending)
     room.state = RoomState.SETTLED
-    room.payoutTxId = payoutTxId
+    room.payoutTxId = 'pending'
     room.currentTurnSeatIndex = null // Game over, no more turns
     store.updateRoom(roomId, room)
 
-    logRoomEvent('Game settled', roomId, { survivorCount: survivors.length, payoutTxId })
-
-    // Broadcast GAME_END event
+    // Broadcast GAME_END event with pending payout - frontend will show results
     const payouts = store.getPayouts(roomId)
     if (this.wsServer) {
       const payload: GameEndPayload = {
         roomId,
         survivors: survivors.map((s) => s.index),
         payouts,
-        payoutTxId: room.payoutTxId!,
+        payoutTxId: 'pending',
       }
       this.wsServer.broadcastToRoom(roomId, WSEvent.GAME_END, payload)
     }
@@ -891,6 +1050,73 @@ export class RoomManager {
       this.wsServer.broadcastToRoom(roomId, WSEvent.RNG_REVEAL, payload)
     }
 
+    // Wait for frontend to confirm results are shown before sending payout
+    // This prevents the wallet notification from spoiling the result
+    // Timeout must be long enough for all death animations to complete:
+    // - Each round takes ~8-9 seconds (spin + cock + suspense + reveal)
+    // - Worst case: 5 deaths = ~45 seconds of animation + buffer
+    const PAYOUT_WAIT_TIMEOUT = 60000 // 60 seconds max wait (matches frontend fallback)
+    const pendingPayout: PendingPayoutState = {
+      roomId,
+      confirmedClients: new Set(),
+    }
+    this.pendingPayouts.set(roomId, pendingPayout)
+
+    logRoomEvent('Waiting for frontend to confirm results shown', roomId)
+
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          pendingPayout.resolveWait = resolve
+        }),
+        new Promise<void>((resolve) => {
+          pendingPayout.timeoutHandle = setTimeout(() => {
+            logRoomEvent('Payout wait timeout - proceeding anyway', roomId)
+            resolve()
+          }, PAYOUT_WAIT_TIMEOUT)
+        }),
+      ])
+    } finally {
+      // Clean up timeout
+      if (pendingPayout.timeoutHandle) {
+        clearTimeout(pendingPayout.timeoutHandle)
+      }
+      this.pendingPayouts.delete(roomId)
+    }
+
+    logRoomEvent('Frontend confirmed or timeout - sending payout', roomId, {
+      confirmedClients: Array.from(pendingPayout.confirmedClients)
+    })
+
+    // Now send actual payout transaction
+    let payoutTxId = 'payout_failed'
+    try {
+      const { payoutService } = await import('../crypto/services/payout-service.js')
+      payoutTxId = await payoutService.sendPayout(roomId)
+      logRoomEvent('Payout transaction sent', roomId, { txId: payoutTxId })
+    } catch (error: any) {
+      logger.error('Failed to send payout transaction', {
+        roomId,
+        error: error?.message || String(error),
+        stack: error?.stack
+      })
+    }
+
+    // Update room with actual payout txId
+    room.payoutTxId = payoutTxId
+    store.updateRoom(roomId, room)
+
+    // Broadcast PAYOUT_SENT so frontend knows transaction is now live
+    if (this.wsServer) {
+      const sentPayload: PayoutSentPayload = {
+        roomId,
+        payoutTxId,
+      }
+      this.wsServer.broadcastToRoom(roomId, WSEvent.PAYOUT_SENT, sentPayload)
+    }
+
+    logRoomEvent('Game settled', roomId, { survivorCount: survivors.length, payoutTxId })
+
     // Notify callback that room is completed
     if (this.onRoomCompleted) {
       this.onRoomCompleted(roomId)
@@ -912,9 +1138,14 @@ export class RoomManager {
       this.wsServer.broadcastToRoom(roomId, WSEvent.ROOM_UPDATE, { room })
     }
 
-    // Clean up server seed and pending game state from memory
+    // Clean up all room-related state from memory
     this.serverSeeds.delete(roomId)
     this.pendingGames.delete(roomId)
+    this.pendingPayouts.delete(roomId)
+    // Clean up any deposit locks for this room (convert to array first to avoid iteration-while-deleting)
+    Array.from(this.depositLocks)
+      .filter(key => key.startsWith(`${roomId}:`))
+      .forEach(key => this.depositLocks.delete(key))
 
     logRoomEvent('Room aborted, processing refunds', roomId)
 
@@ -997,6 +1228,21 @@ export class RoomManager {
 
   getAllRooms(): Room[] {
     return store.getAllRooms()
+  }
+
+  /**
+   * Find the active room for a user (if any)
+   * Returns the room if user is in an active game (LOBBY, FUNDING, LOCKED, PLAYING)
+   * Returns undefined if user is not in any active room
+   */
+  getActiveRoomForUser(walletAddress: string): Room | undefined {
+    const activeStates: RoomState[] = [RoomState.LOBBY, RoomState.FUNDING, RoomState.LOCKED, RoomState.PLAYING]
+    const rooms = store.getAllRooms()
+
+    return rooms.find(room =>
+      activeStates.includes(room.state as RoomState) &&
+      room.seats.some(seat => seat.walletAddress === walletAddress)
+    )
   }
 
   /**
