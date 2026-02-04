@@ -55,6 +55,27 @@ export default function LobbyPage() {
 
   const ws = useWebSocket(appConfig.ws.url)
 
+  // Check if user is already in an active room and redirect
+  useEffect(() => {
+    if (!address) return
+
+    const checkActiveRoom = async () => {
+      try {
+        const response = await fetch(`${appConfig.api.baseUrl}/api/users/${address}/active-room`)
+        if (response.ok) {
+          const data = await response.json()
+          if (data.room) {
+            toast.info('Rejoining your active game...')
+            router.push(`/room/${data.room.id}`)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to check active room:', err)
+      }
+    }
+    checkActiveRoom()
+  }, [address, router, toast])
+
   // Fetch game config
   useEffect(() => {
     const fetchConfig = async () => {

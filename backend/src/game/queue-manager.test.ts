@@ -11,6 +11,7 @@ vi.mock('./room-manager.js', () => ({
   roomManager: {
     createRoom: vi.fn(),
     joinRoom: vi.fn(),
+    getActiveRoomForUser: vi.fn().mockReturnValue(undefined), // User not in any room by default
   },
 }))
 

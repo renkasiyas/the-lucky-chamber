@@ -76,7 +76,7 @@ async function main() {
   if (config.botsEnabled) {
     botManager.initializeBotAddresses()
 
-    // Log bot addresses for funding
+    // Log bot addresses for funding (first 5 for legacy, expanded pool supports multiple games)
     const botAddresses = botManager.getBotAddresses()
     logger.info('Bot addresses (fund these with testnet KAS):', {
       bot1: botAddresses[0],
@@ -84,6 +84,8 @@ async function main() {
       bot3: botAddresses[2],
       bot4: botAddresses[3],
       bot5: botAddresses[4],
+      totalBots: botAddresses.length,
+      note: 'Additional bots (6-20) support multiple simultaneous games'
     })
   }
 

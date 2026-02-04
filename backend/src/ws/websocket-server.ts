@@ -486,7 +486,7 @@ export class WSServer {
     const uniqueUsers = this.getUniqueUserCount()
     this.clients.forEach((client) => {
       this.send(client.ws, {
-        event: 'connection:count',
+        event: WSEvent.CONNECTION_COUNT,
         payload: { count: uniqueUsers }
       })
     })

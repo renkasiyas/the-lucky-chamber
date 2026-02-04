@@ -131,6 +131,7 @@ describe('BotManager', () => {
         roomId: 'room-123',
         playerCount: 2,
         botCount: 0,
+        totalActiveBotsNow: 0,
       })
     })
   })
@@ -153,6 +154,8 @@ describe('BotManager', () => {
 
       expect(logger.debug).toHaveBeenCalledWith('Bot manager: Room completed', {
         roomId: 'room-123',
+        releasedBots: 0,
+        availableBotsNow: 0, // 0 because initializeBotAddresses not called
       })
     })
   })

@@ -289,6 +289,16 @@ export class RoomManager {
       throw new Error('Wallet already in room')
     }
 
+    // Check if user is already in another active room (bots are exempt)
+    const botManager = (global as any).botManager
+    const isBot = botManager?.isBot?.(walletAddress) ?? false
+    if (!isBot) {
+      const existingRoom = this.getActiveRoomForUser(walletAddress)
+      if (existingRoom && existingRoom.id !== roomId) {
+        throw new Error(`Already in active room: ${existingRoom.id}`)
+      }
+    }
+
     const seatIndex = room.seats.length
 
     // Derive unique deposit address for this seat (zero-ambiguity deposit matching)
@@ -1129,12 +1139,10 @@ export class RoomManager {
     this.serverSeeds.delete(roomId)
     this.pendingGames.delete(roomId)
     this.pendingPayouts.delete(roomId)
-    // Clean up any deposit locks for this room
-    for (const key of this.depositLocks) {
-      if (key.startsWith(`${roomId}:`)) {
-        this.depositLocks.delete(key)
-      }
-    }
+    // Clean up any deposit locks for this room (convert to array first to avoid iteration-while-deleting)
+    Array.from(this.depositLocks)
+      .filter(key => key.startsWith(`${roomId}:`))
+      .forEach(key => this.depositLocks.delete(key))
 
     logRoomEvent('Room aborted, processing refunds', roomId)
 
@@ -1217,6 +1225,21 @@ export class RoomManager {
 
   getAllRooms(): Room[] {
     return store.getAllRooms()
+  }
+
+  /**
+   * Find the active room for a user (if any)
+   * Returns the room if user is in an active game (LOBBY, FUNDING, LOCKED, PLAYING)
+   * Returns undefined if user is not in any active room
+   */
+  getActiveRoomForUser(walletAddress: string): Room | undefined {
+    const activeStates: RoomState[] = [RoomState.LOBBY, RoomState.FUNDING, RoomState.LOCKED, RoomState.PLAYING]
+    const rooms = store.getAllRooms()
+
+    return rooms.find(room =>
+      activeStates.includes(room.state as RoomState) &&
+      room.seats.some(seat => seat.walletAddress === walletAddress)
+    )
   }
 
   /**

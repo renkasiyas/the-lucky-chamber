@@ -62,6 +62,16 @@ export class QueueManager {
    * Join quick-match queue
    */
   joinQueue(walletAddress: string, mode: GameMode, seatPrice?: number): string {
+    // Check if user is already in an active room (bots are exempt)
+    const botManager = (global as any).botManager
+    const isBot = botManager?.isBot?.(walletAddress) ?? false
+    if (!isBot) {
+      const existingRoom = roomManager.getActiveRoomForUser(walletAddress)
+      if (existingRoom) {
+        throw new Error(`Already in active room: ${existingRoom.id}`)
+      }
+    }
+
     // Determine seat price
     let price: number
     if (mode === GameMode.REGULAR) {

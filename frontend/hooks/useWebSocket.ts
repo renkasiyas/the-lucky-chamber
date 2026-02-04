@@ -39,12 +39,13 @@ export function useWebSocket(url: string, options?: UseWebSocketOptions): UseWeb
         ws.onopen = () => {
           setConnected(true)
           // Replay any messages queued while disconnected
-          const pending = pendingMessagesRef.current
-          pendingMessagesRef.current = []
+          // Copy array first, then clear AFTER successful replay (prevents message loss on error)
+          const pending = [...pendingMessagesRef.current]
           for (const msg of pending) {
             const message = JSON.stringify({ event: msg.event, payload: msg.payload })
             ws.send(message)
           }
+          pendingMessagesRef.current = []
         }
 
         ws.onmessage = (event) => {
