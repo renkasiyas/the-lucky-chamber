@@ -4,6 +4,7 @@
 import express from 'express'
 import cors from 'cors'
 // kaspa-wasm types imported dynamically where needed
+import { WSEvent } from '../../shared/index.js'
 import { config } from './config.js'
 import { router } from './api/routes.js'
 import { WSServer } from './ws/websocket-server.js'
@@ -98,7 +99,7 @@ async function main() {
   })
 
   queueManager.setQueueUpdateCallback((queueKey, count) => {
-    wsServer.broadcast('queue:update', { queueKey, count })
+    wsServer.broadcast(WSEvent.QUEUE_UPDATE, { queueKey, count })
   })
 
   // Wire up room manager callback to notify bot manager when rooms complete

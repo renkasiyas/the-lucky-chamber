@@ -40,7 +40,7 @@
       "cd backend && npm run test -- --run --reporter=verbose"
     ],
     "frontend/**/*.{ts,tsx}": [
-      "cd frontend && npm run lint -- --fix"
+      "cd frontend && npm run lint"
     ],
     "frontend/**/*.test.{ts,tsx}": [
       "cd frontend && npm run test -- --run --reporter=verbose"

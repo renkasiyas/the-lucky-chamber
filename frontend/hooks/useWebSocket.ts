@@ -24,6 +24,8 @@ export function useWebSocket(url: string, options?: UseWebSocketOptions): UseWeb
   const handlersRef = useRef<Map<string, Set<(payload: unknown) => void>>>(new Map())
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined)
   const urlRef = useRef(url)
+  // Queue for messages sent while disconnected - replayed on reconnect
+  const pendingMessagesRef = useRef<Array<{ event: string; payload: unknown }>>([])
 
   urlRef.current = url
 
@@ -36,6 +38,13 @@ export function useWebSocket(url: string, options?: UseWebSocketOptions): UseWeb
 
         ws.onopen = () => {
           setConnected(true)
+          // Replay any messages queued while disconnected
+          const pending = pendingMessagesRef.current
+          pendingMessagesRef.current = []
+          for (const msg of pending) {
+            const message = JSON.stringify({ event: msg.event, payload: msg.payload })
+            ws.send(message)
+          }
         }
 
         ws.onmessage = (event) => {
@@ -83,6 +92,10 @@ export function useWebSocket(url: string, options?: UseWebSocketOptions): UseWeb
 
   const send = useCallback((event: string, payload: unknown) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      // Queue message for replay on reconnect (max 50 to prevent memory bloat)
+      if (pendingMessagesRef.current.length < 50) {
+        pendingMessagesRef.current.push({ event, payload })
+      }
       return
     }
 

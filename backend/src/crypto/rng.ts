@@ -1,5 +1,20 @@
 // ABOUTME: Provably-fair random number generation system
 // ABOUTME: Implements commit-reveal scheme with HMAC-SHA256 using server seed, client seeds, and block hash
+//
+// SECURITY CONSIDERATIONS:
+// The randomness combines three sources:
+// 1. Server seed: Committed before game, revealed after (prevents server manipulation after players join)
+// 2. Client seeds: Submitted by players (prevents server from predicting outcome in advance)
+// 3. Block hash: External entropy from Kaspa blockchain at settlement_block_height
+//
+// KNOWN LIMITATION - Block Hash Predictability:
+// A block proposer (validator/miner) who knows the server seed could theoretically:
+// - Propose a specific block hash that produces a favorable outcome
+// - Withhold blocks until they get a favorable hash
+// This attack requires: (a) being a block proposer, (b) knowing the server seed
+// Mitigation: Server seed is kept secret until after game ends. This means an attacker
+// would need to collude with the server operator, at which point they could cheat anyway.
+// For higher-stakes games, consider commit-reveal for block hash selection or longer settlement offsets.
 
 import crypto from 'crypto'
 import { SETTLEMENT_BLOCK_OFFSET } from '../../../shared/index.js'

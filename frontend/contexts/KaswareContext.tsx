@@ -3,7 +3,7 @@
 
 'use client'
 
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react'
 import type { KaswareWallet } from '../types/kasware'
 
 interface KaswareContextValue {
@@ -170,6 +170,12 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
     [getKasware, connected]
   )
 
+  // Refs for stable event handler references (prevents memory leaks from stale listeners)
+  const disconnectRef = useRef(disconnect)
+  const refreshBalanceRef = useRef(refreshBalance)
+  disconnectRef.current = disconnect
+  refreshBalanceRef.current = refreshBalance
+
   // Listen for account changes
   useEffect(() => {
     const kasware = getKasware()
@@ -177,10 +183,10 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
 
     const handleAccountsChanged = (accounts: string[]) => {
       if (accounts.length === 0) {
-        disconnect()
+        disconnectRef.current()
       } else {
         setAddress(accounts[0])
-        refreshBalance(true) // silent refresh on account change
+        refreshBalanceRef.current(true) // silent refresh on account change
       }
     }
 
@@ -195,7 +201,7 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       kasware.removeListener('accountsChanged', handleAccountsChanged)
       kasware.removeListener('networkChanged', handleNetworkChanged)
     }
-  }, [getKasware, disconnect, refreshBalance])
+  }, [getKasware]) // Only re-run if kasware instance changes
 
   // Check initial wallet state - with retry for async extension injection
   useEffect(() => {

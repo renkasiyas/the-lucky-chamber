@@ -91,10 +91,15 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
   const hammerOrbitControls = useAnimation() // Controls hammer rotation around chamber
   const barrelControls = useAnimation()
 
-  // Refs
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REFS - Animation state tracking (each serves a distinct purpose)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Timeout management
   const timeouts = useRef<NodeJS.Timeout[]>([])
-  const spinTimeout = useRef<NodeJS.Timeout | null>(null) // Separate ref for spin callback - never cleared by revealOutcome
+  const spinTimeout = useRef<NodeJS.Timeout | null>(null) // Protected from clearTimeouts() - ensures respin completes
+  // Round processing
   const lastProcessedRound = useRef(room.rounds.length > 0 ? room.rounds[room.rounds.length - 1].index : -1)
+  // Animation state (visual position tracking)
   const barrelAngle = useRef(0)
   // Compute initial payment position for hammer (before useMemo runs)
   const initialPaymentPosition = (() => {
@@ -108,9 +113,18 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
     return sorted.findIndex(s => s.index === room.currentTurnSeatIndex)
   })()
   const hammerOrbitAngle = useRef(initialPaymentPosition * 60) // Track cumulative rotation
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ANIMATION LOCKS - These refs prevent race conditions and visual glitches
+  // They work together but track different aspects of animation state:
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 1. hasSpunThisTurn: Prevents calling startMyTurn() twice within same turn
   const hasSpunThisTurn = useRef(false)
-  const recentlySpun = useRef(false) // Prevent double spin after respin
-  const animatingRound = useRef<number | null>(null) // Track which round is animating - null when idle
+  // 2. recentlySpun: Carries across turns - prevents next player from double-spinning
+  //    when previous player's respin just completed
+  const recentlySpun = useRef(false)
+  // 3. animatingRound: Tracks which specific round is being animated (null = idle)
+  //    Used to prevent overlapping animations and ensure sequential processing
+  const animatingRound = useRef<number | null>(null)
   // If game is already PLAYING on mount, we likely reloaded mid-game - skip spin animation
   const mountedDuringGame = useRef(room.state === 'PLAYING')
   const triggerPullTime = useRef<number>(0) // Track when trigger was pulled for timing

@@ -338,6 +338,24 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     const mySeat = room.seats.find((s) => s.walletAddress === address)
     if (!mySeat) return
 
+    // Idempotency: prevent double deposit if seat already confirmed
+    if (mySeat.confirmed) {
+      toast.info('Deposit already confirmed!')
+      return
+    }
+
+    // Idempotency: prevent double deposit if already sent this session (waiting for confirmation)
+    if (depositSent && !depositFailed) {
+      toast.info('Deposit already sent, waiting for confirmation...')
+      return
+    }
+
+    // Idempotency: prevent double deposit if already in-flight
+    if (retryingDeposit) {
+      toast.info('Deposit already in progress...')
+      return
+    }
+
     try {
       setRetryingDeposit(true)
 

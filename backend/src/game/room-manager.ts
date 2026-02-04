@@ -62,6 +62,7 @@ export class RoomManager {
   private onTurnStart: TurnStartCallback | null = null
   private pendingGames: Map<string, PendingGameState> = new Map() // roomId -> pending state
   private pendingPayouts: Map<string, PendingPayoutState> = new Map() // roomId -> pending payout state
+  private depositLocks: Set<string> = new Set() // roomId:seatIndex -> prevents concurrent confirmDeposit
 
   /**
    * Set callback for when a room is completed (settled or aborted)
@@ -406,7 +407,7 @@ export class RoomManager {
 
       // Broadcast the forfeit
       if (this.wsServer) {
-        this.wsServer.broadcastToRoom(roomId, 'player:forfeit', {
+        this.wsServer.broadcastToRoom(roomId, WSEvent.PLAYER_FORFEIT, {
           roomId,
           seatIndex: seat.index,
           walletAddress
@@ -428,47 +429,65 @@ export class RoomManager {
 
   /**
    * Mark a seat as funded (called by transaction monitor)
+   * Uses a lock to prevent race conditions from concurrent confirmations
    */
   confirmDeposit(roomId: string, seatIndex: number, txId: string, amount: number): void {
-    const room = store.getRoom(roomId)
-    if (!room) throw new Error('Room not found')
+    // Lock key for this specific seat
+    const lockKey = `${roomId}:${seatIndex}`
 
-    // Only confirm deposits in FUNDING state
-    if (room.state !== RoomState.FUNDING) {
-      logger.warn('Cannot confirm deposit - room not in FUNDING state', {
-        roomId,
-        currentState: room.state,
-        seatIndex
-      })
+    // Check for concurrent processing (prevents race condition)
+    if (this.depositLocks.has(lockKey)) {
+      logger.debug('Deposit confirmation already in progress, skipping', { roomId, seatIndex })
       return
     }
 
-    // Use .find() since seatIndex is the stable seat.index, not array position
-    const seat = room.seats.find(s => s.index === seatIndex)
-    if (!seat) throw new Error('Seat not found')
+    // Acquire lock
+    this.depositLocks.add(lockKey)
 
-    // Idempotent: skip if already confirmed (prevents race conditions)
-    if (seat.confirmed) {
-      logger.debug('Seat already confirmed, skipping', { roomId, seatIndex, existingTxId: seat.depositTxId })
-      return
+    try {
+      const room = store.getRoom(roomId)
+      if (!room) throw new Error('Room not found')
+
+      // Only confirm deposits in FUNDING state
+      if (room.state !== RoomState.FUNDING) {
+        logger.warn('Cannot confirm deposit - room not in FUNDING state', {
+          roomId,
+          currentState: room.state,
+          seatIndex
+        })
+        return
+      }
+
+      // Use .find() since seatIndex is the stable seat.index, not array position
+      const seat = room.seats.find(s => s.index === seatIndex)
+      if (!seat) throw new Error('Seat not found')
+
+      // Idempotent: skip if already confirmed
+      if (seat.confirmed) {
+        logger.debug('Seat already confirmed, skipping', { roomId, seatIndex, existingTxId: seat.depositTxId })
+        return
+      }
+
+      seat.depositTxId = txId
+      seat.amount = amount
+      seat.confirmed = true
+      seat.confirmedAt = Date.now()
+
+      store.updateSeat(roomId, seatIndex, seat)
+      logRoomEvent('Deposit confirmed', roomId, { seatIndex, amount, txId })
+
+      // Broadcast the update so frontend sees the confirmation
+      const updatedRoom = store.getRoom(roomId)
+      if (this.wsServer && updatedRoom) {
+        this.wsServer.broadcastToRoom(roomId, WSEvent.ROOM_UPDATE, { room: updatedRoom })
+      }
+
+      // Check if all seats are funded
+      this.checkAndLockRoom(roomId)
+    } finally {
+      // Release lock
+      this.depositLocks.delete(lockKey)
     }
-
-    seat.depositTxId = txId
-    seat.amount = amount
-    seat.confirmed = true
-    seat.confirmedAt = Date.now()
-
-    store.updateSeat(roomId, seatIndex, seat)
-    logRoomEvent('Deposit confirmed', roomId, { seatIndex, amount, txId })
-
-    // Broadcast the update so frontend sees the confirmation
-    const updatedRoom = store.getRoom(roomId)
-    if (this.wsServer && updatedRoom) {
-      this.wsServer.broadcastToRoom(roomId, WSEvent.ROOM_UPDATE, { room: updatedRoom })
-    }
-
-    // Check if all seats are funded
-    this.checkAndLockRoom(roomId)
   }
 
   /**
@@ -1106,10 +1125,16 @@ export class RoomManager {
       this.wsServer.broadcastToRoom(roomId, WSEvent.ROOM_UPDATE, { room })
     }
 
-    // Clean up server seed and pending game state from memory
+    // Clean up all room-related state from memory
     this.serverSeeds.delete(roomId)
     this.pendingGames.delete(roomId)
     this.pendingPayouts.delete(roomId)
+    // Clean up any deposit locks for this room
+    for (const key of this.depositLocks) {
+      if (key.startsWith(`${roomId}:`)) {
+        this.depositLocks.delete(key)
+      }
+    }
 
     logRoomEvent('Room aborted, processing refunds', roomId)
 

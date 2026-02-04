@@ -63,7 +63,7 @@ export class WSServer {
 
         // Send room:assigned event
         this.send(client.ws, {
-          event: 'room:assigned',
+          event: WSEvent.ROOM_ASSIGNED,
           payload: { roomId }
         })
       }
@@ -330,7 +330,7 @@ export class WSServer {
 
     // Send confirmation (could include queue position)
     this.send(ws, {
-      event: 'queue:joined',
+      event: WSEvent.QUEUE_JOINED,
       payload: { mode, seatPrice },
     })
   }
@@ -348,7 +348,7 @@ export class WSServer {
     queueManager.leaveQueue(client.walletAddress)
 
     this.send(ws, {
-      event: 'queue:left',
+      event: WSEvent.QUEUE_LEFT,
       payload: {},
     })
   }

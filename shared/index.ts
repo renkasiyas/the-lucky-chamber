@@ -98,6 +98,7 @@ export interface Round {
 
 export interface Payout {
   roomId: string
+  /** @deprecated Redundant with `address` - both store wallet address. Kept for DB compatibility. */
   userId: string
   address: string
   amount: number
@@ -120,6 +121,7 @@ export const WSEvent = {
 
   // Server -> Client
   ROOM_UPDATE: 'room:update',
+  ROOM_ASSIGNED: 'room:assigned', // Player assigned to room from queue
   GAME_START: 'game:start',
   TURN_START: 'turn:start',
   TURN_TIMER_START: 'turn:timer_start', // Server signals pull timer started (for countdown sync)
@@ -127,6 +129,10 @@ export const WSEvent = {
   GAME_END: 'game:end',
   PAYOUT_SENT: 'payout:sent', // Server signals payout transaction was sent
   RNG_REVEAL: 'rng:reveal',
+  PLAYER_FORFEIT: 'player:forfeit', // Player left during PLAYING state
+  QUEUE_JOINED: 'queue:joined', // Confirmation of queue join
+  QUEUE_LEFT: 'queue:left', // Confirmation of queue leave
+  QUEUE_UPDATE: 'queue:update', // Queue count update broadcast
   CONNECTION_COUNT: 'connection:count',
   ERROR: 'error',
 } as const
@@ -233,6 +239,30 @@ export interface RNGRevealPayload {
 export interface ErrorPayload {
   message: string
   code?: string
+}
+
+export interface RoomAssignedPayload {
+  roomId: string
+}
+
+export interface PlayerForfeitPayload {
+  roomId: string
+  seatIndex: number
+  walletAddress: string
+}
+
+export interface QueueJoinedPayload {
+  mode: GameMode
+  seatPrice?: number
+}
+
+export interface QueueLeftPayload {
+  // Empty payload
+}
+
+export interface QueueUpdatePayload {
+  queueKey: string
+  count: number
 }
 
 // ============================================================================
