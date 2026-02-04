@@ -556,9 +556,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
   // Unified UI state: prevents all UI elements from revealing game end before animation completes
   // On page refresh during SETTLED, we show SETTLED immediately (missed the live animation)
-  // During live gameplay, we wait for showGameFinished before transitioning UI to SETTLED
+  // During live gameplay, we wait for gameResultsSeen before transitioning UI to SETTLED
+  // gameResultsSeen persists even after modal is dismissed (unlike showGameFinished)
   const isRefreshDuringSETTLED = prevRoomStateRef.current === null && room.state === 'SETTLED'
-  const isUiSettled = room.state === 'SETTLED' && (showGameFinished || isRefreshDuringSETTLED)
+  const isUiSettled = room.state === 'SETTLED' && (gameResultsSeen || isRefreshDuringSETTLED)
   const uiRoomState = room.state === 'SETTLED' && !isUiSettled ? 'PLAYING' : room.state
 
   // Don't advance to step 5 (RESULT) until death animation completes
