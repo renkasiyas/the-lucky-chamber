@@ -222,7 +222,7 @@ describe('SoundContext', () => {
         expect(addEventListenerSpy).toHaveBeenCalledWith(
           event,
           expect.any(Function),
-          expect.objectContaining({ once: true })
+          expect.objectContaining({ capture: true, passive: true })
         )
       })
     })

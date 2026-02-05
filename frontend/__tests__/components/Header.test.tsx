@@ -52,6 +52,8 @@ describe('Header', () => {
     sendKaspa: vi.fn(),
     error: null,
     network: null,
+    expectedNetwork: 'mainnet',
+    networkMismatch: false,
     showWalletModal: false,
     closeWalletModal: vi.fn(),
   }
@@ -67,8 +69,8 @@ describe('Header', () => {
 
     vi.spyOn(useKaswareModule, 'useKasware').mockReturnValue(defaultKaswareMock)
     vi.spyOn(useWebSocketModule, 'useWebSocket').mockReturnValue(defaultWebSocketMock)
-    vi.spyOn(useKNSModule, 'useKNS').mockReturnValue({ domain: null, loading: false })
-    vi.spyOn(useSoundModule, 'useSound').mockReturnValue({ play: mockPlay })
+    vi.spyOn(useKNSModule, 'useKNS').mockReturnValue({ domain: null, loading: false, error: null, refetch: vi.fn() })
+    vi.spyOn(useSoundModule, 'useSound').mockReturnValue({ play: mockPlay, stop: vi.fn(), stopAll: vi.fn(), allLoaded: true, unlocked: true })
     vi.spyOn(ToastModule, 'useToast').mockReturnValue({
       success: mockToastSuccess,
       error: vi.fn(),
@@ -111,25 +113,23 @@ describe('Header', () => {
     })
 
     it('shows live users when WebSocket provides count', async () => {
-      let connectionCountHandler: ((payload: { count?: number }) => void) | null = null
+      const connectionCountHandlers: Array<(payload: unknown) => void> = []
 
       vi.spyOn(useWebSocketModule, 'useWebSocket').mockReturnValue({
         connected: true,
         send: vi.fn(),
-        subscribe: vi.fn((event: string, handler: (payload: { count?: number }) => void) => {
+        subscribe: vi.fn(<T,>(event: string, handler: (payload: T) => void) => {
           if (event === 'connection:count') {
-            connectionCountHandler = handler
+            connectionCountHandlers.push(handler as (payload: unknown) => void)
           }
           return vi.fn()
-        }),
+        }) as <T = unknown>(event: string, handler: (payload: T) => void) => () => void,
       })
 
       render(<Header />)
 
       // Simulate WebSocket message
-      if (connectionCountHandler) {
-        connectionCountHandler({ count: 42 })
-      }
+      connectionCountHandlers.forEach(handler => handler({ count: 42 }))
 
       await waitFor(() => {
         expect(screen.getByText('42')).toBeInTheDocument()
@@ -138,24 +138,22 @@ describe('Header', () => {
     })
 
     it('shows pulsing indicator with live users', async () => {
-      let connectionCountHandler: ((payload: { count?: number }) => void) | null = null
+      const connectionCountHandlers: Array<(payload: unknown) => void> = []
 
       vi.spyOn(useWebSocketModule, 'useWebSocket').mockReturnValue({
         connected: true,
         send: vi.fn(),
-        subscribe: vi.fn((event: string, handler: (payload: { count?: number }) => void) => {
+        subscribe: vi.fn(<T,>(event: string, handler: (payload: T) => void) => {
           if (event === 'connection:count') {
-            connectionCountHandler = handler
+            connectionCountHandlers.push(handler as (payload: unknown) => void)
           }
           return vi.fn()
-        }),
+        }) as <T = unknown>(event: string, handler: (payload: T) => void) => () => void,
       })
 
       const { container } = render(<Header />)
 
-      if (connectionCountHandler) {
-        connectionCountHandler({ count: 10 })
-      }
+      connectionCountHandlers.forEach(handler => handler({ count: 10 }))
 
       await waitFor(() => {
         const pulsingIndicator = container.querySelector('.animate-ping')
@@ -284,6 +282,8 @@ describe('Header', () => {
       vi.spyOn(useKNSModule, 'useKNS').mockReturnValue({
         domain: 'alice.kas',
         loading: false,
+        error: null,
+        refetch: vi.fn(),
       })
 
       render(<Header />)
@@ -296,6 +296,8 @@ describe('Header', () => {
       vi.spyOn(useKNSModule, 'useKNS').mockReturnValue({
         domain: 'alice.kas',
         loading: false,
+        error: null,
+        refetch: vi.fn(),
       })
 
       render(<Header />)

@@ -48,7 +48,8 @@ export function SoundProvider({ children }: { children: ReactNode }) {
   const unlockAttempted = useRef(false)
 
   // Unlock audio on first user interaction (required for mobile browsers)
-  const unlockAudio = useCallback(() => {
+  const unlockAudio = useCallback(async () => {
+    if (unlocked) return // Already unlocked successfully
     if (unlockAttempted.current) return
     unlockAttempted.current = true
 
@@ -58,37 +59,64 @@ export function SoundProvider({ children }: { children: ReactNode }) {
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext
       if (AudioContext) {
         const ctx = new AudioContext()
+        // iOS Safari requires resume() to be called from user gesture
+        if (ctx.state === 'suspended') {
+          await ctx.resume()
+        }
         const buffer = ctx.createBuffer(1, 1, 22050)
         const source = ctx.createBufferSource()
         source.buffer = buffer
         source.connect(ctx.destination)
         source.start(0)
-        source.stop(0.001)
+        // Don't close context immediately - let it process
+        setTimeout(() => ctx.close().catch(() => {}), 100)
       }
+
+      // Also try to play each audio element to ensure they're unlocked
+      // This is needed because HTML5 Audio elements have separate unlock requirements
+      const unlockPromises = Array.from(audioRefs.current.values()).map(async (audio) => {
+        try {
+          audio.volume = 0
+          audio.muted = true
+          await audio.play()
+          audio.pause()
+          audio.currentTime = 0
+          audio.volume = 1
+          audio.muted = false
+        } catch {
+          // Silent fail for individual audio elements
+        }
+      })
+      await Promise.all(unlockPromises)
+
+      setUnlocked(true)
     } catch {
       // Fallback: touch audio elements without actually playing them
       audioRefs.current.forEach((audio) => {
         audio.load()
       })
+      // Allow retry on next interaction
+      unlockAttempted.current = false
     }
-
-    setUnlocked(true)
-  }, [])
+  }, [unlocked])
 
   // Listen for user interaction to unlock audio
   useEffect(() => {
+    if (unlocked) return // Already unlocked, no need for listeners
+
     const events = ['touchstart', 'touchend', 'mousedown', 'keydown', 'click']
 
     const handleInteraction = () => {
-      unlockAudio()
-      // Remove listeners after first interaction
+      // Remove listeners immediately to prevent multiple calls
       events.forEach(event => {
         document.removeEventListener(event, handleInteraction, true)
       })
+      // Call unlock (async but we don't need to await)
+      unlockAudio()
     }
 
     events.forEach(event => {
-      document.addEventListener(event, handleInteraction, { once: true, capture: true, passive: true })
+      document.addEventListener(event, handleInteraction, { capture: true, passive: true })
     })
 
     return () => {
@@ -96,7 +124,7 @@ export function SoundProvider({ children }: { children: ReactNode }) {
         document.removeEventListener(event, handleInteraction, true)
       })
     }
-  }, [unlockAudio])
+  }, [unlockAudio, unlocked])
 
   // Preload all sounds
   useEffect(() => {

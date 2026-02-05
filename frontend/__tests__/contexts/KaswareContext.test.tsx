@@ -7,11 +7,11 @@ import { ReactNode } from 'react'
 import { KaswareProvider, useKaswareContext } from '../../contexts/KaswareContext'
 import type { KaswareWallet } from '../../types/kasware'
 
-// Mock wallet instance
+// Mock wallet instance - uses mainnet to match default expectedNetwork
 const createMockWallet = (): KaswareWallet => ({
-  requestAccounts: vi.fn(async () => ['kaspatest:qq1234567890']),
+  requestAccounts: vi.fn(async () => ['kaspa:qq1234567890abcdefghijklmnop']),
   getAccounts: vi.fn(async () => []),
-  getNetwork: vi.fn(async () => 'testnet-10'),
+  getNetwork: vi.fn(async () => 'mainnet'),
   switchNetwork: vi.fn(async () => {}),
   getPublicKey: vi.fn(async () => 'mock-public-key'),
   getBalance: vi.fn(async () => ({
@@ -111,8 +111,8 @@ describe('KaswareContext', () => {
     expect(mockWallet.getBalance).toHaveBeenCalled()
 
     expect(result.current.connected).toBe(true)
-    expect(result.current.address).toBe('kaspatest:qq1234567890')
-    expect(result.current.network).toBe('testnet-10')
+    expect(result.current.address).toBe('kaspa:qq1234567890abcdefghijklmnop')
+    expect(result.current.network).toBe('mainnet')
     expect(result.current.balance).toEqual({
       total: '100000000',
       confirmed: '100000000',
