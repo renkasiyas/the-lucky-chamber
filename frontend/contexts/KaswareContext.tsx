@@ -5,7 +5,6 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react'
 import type { KaswareWallet } from '../types/kasware'
-import { forceWebviewReflow } from '../lib/webview'
 
 // Expected network from environment (mainnet or testnet-10)
 const EXPECTED_NETWORK = process.env.NEXT_PUBLIC_NETWORK || 'mainnet'
@@ -123,7 +122,7 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       setError(message)
     } finally {
       setConnecting(false)
-      forceWebviewReflow()
+
     }
   }, [getKasware])
 
@@ -159,8 +158,6 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         setError(message)
       }
       // Silently ignore auto-refresh failures (wallet locked, network issues, etc.)
-    } finally {
-      forceWebviewReflow()
     }
   }, [getKasware, connected, error])
 
@@ -171,12 +168,8 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         throw new Error('Wallet not connected')
       }
 
-      try {
-        const signature = await kasware.signMessage(message, 'ecdsa')
-        return signature
-      } finally {
-        forceWebviewReflow()
-      }
+      const signature = await kasware.signMessage(message, 'ecdsa')
+      return signature
     },
     [getKasware, connected]
   )
@@ -202,8 +195,6 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         })
         // Re-throw the original error so caller can handle it
         throw err
-      } finally {
-        forceWebviewReflow()
       }
     },
     [getKasware, connected]
