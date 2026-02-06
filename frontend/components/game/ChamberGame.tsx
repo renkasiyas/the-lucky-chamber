@@ -1024,7 +1024,7 @@ export function ChamberGame({ room, myAddress, onPullTrigger, onReadyForTurn, on
             STATUS / CONTROLS AREA
             ════════════════════════════════════════════════════════════════════ */}
 
-        <div className="mt-2 md:mt-8 text-center min-h-[100px] md:min-h-[160px]">
+        <div className="mt-2 md:mt-8 text-center min-h-[80px] md:min-h-[160px]">
           <AnimatePresence mode="wait">
 
             {/* IDLE - Watching someone else */}

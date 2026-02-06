@@ -593,7 +593,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   )
 
   return (
-    <div className="min-h-screen bg-void pt-10 md:pt-20 pb-4 md:pb-8">
+    <div className="min-h-screen bg-void pt-16 md:pt-20 pb-4 md:pb-8">
       {/* Background effects */}
       <div className="fixed inset-0 bg-gradient-to-b from-void via-noir to-void pointer-events-none" />
       {uiRoomState === 'PLAYING' && (
@@ -622,7 +622,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         </div>
 
         {/* Room Info Card */}
-        <Card variant="elevated" className="animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
+        <Card variant="elevated" className={`animate-slide-up ${uiRoomState === 'PLAYING' ? 'hidden md:block' : ''}`} style={{ animationDelay: '0.1s', opacity: 0 }}>
           <CardHeader>
             <div className="flex items-center justify-between w-full">
               <div className="flex items-center gap-2 md:gap-3">
@@ -635,7 +635,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             </div>
           </CardHeader>
           <CardContent className="!p-3 md:!p-6">
-            <div className="grid grid-cols-4 gap-2 md:gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3">
               <div className="bg-smoke/50 border border-edge p-2 md:p-4 rounded-lg md:rounded-xl">
                 <span className="text-[8px] md:text-[10px] font-mono text-ember uppercase tracking-wider block mb-0.5 md:mb-1">Entry</span>
                 <span className="font-display text-base md:text-xl text-gold">{room.seatPrice}</span>

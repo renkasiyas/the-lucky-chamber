@@ -56,7 +56,7 @@ export function CardHeader({ children, className = '' }: CardHeaderProps) {
     <div
       className={`
         flex items-center justify-between gap-4
-        px-5 py-4 border-b border-edge
+        px-3 py-3 sm:px-5 sm:py-4 border-b border-edge
         ${className}
       `.trim().replace(/\s+/g, ' ')}
     >
