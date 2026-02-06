@@ -17,6 +17,11 @@ out/
 .env.prod
 .env.*.local
 
+# Database
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
 # Logs
 *.log
 
