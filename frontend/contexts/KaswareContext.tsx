@@ -122,7 +122,6 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       setError(message)
     } finally {
       setConnecting(false)
-
     }
   }, [getKasware])
 
