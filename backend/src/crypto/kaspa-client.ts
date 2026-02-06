@@ -32,6 +32,7 @@ interface UtxoResult {
 class KaspaClient {
   private initialized: boolean = false
   private networkId: string
+  private disconnectedLogged: boolean = false
 
   constructor() {
     this.networkId = config.network === 'mainnet' ? 'mainnet' : 'testnet-10'
@@ -57,11 +58,53 @@ class KaspaClient {
       await rpcClient.connect()
       this.initialized = true
 
+      // Listen for connection state events (kaspa-wasm auto-reconnects via ConnectStrategy: Retry)
+      rpcClient.addEventListener('connect', () => {
+        this.disconnectedLogged = false
+        logger.info('Kaspa RPC connected', { network: config.network })
+      })
+
+      rpcClient.addEventListener('disconnect', () => {
+        if (!this.disconnectedLogged) {
+          this.disconnectedLogged = true
+          logger.warn('Kaspa RPC disconnected, auto-reconnect in progress', { network: config.network })
+        }
+      })
+
       logger.info('Kaspa client initialized', { network: config.network, networkId: this.networkId })
     } catch (error: any) {
       logger.error('Failed to initialize Kaspa client', { error: error?.message || String(error) })
       throw error
     }
+  }
+
+  /**
+   * Throw if the RPC client is not connected
+   */
+  ensureConnected(): void {
+    if (!rpcClient) {
+      throw new Error('Kaspa client not initialized')
+    }
+    if (typeof rpcClient.isConnected !== 'undefined' && !rpcClient.isConnected) {
+      throw new Error('Kaspa RPC is not connected')
+    }
+  }
+
+  /**
+   * Wait for RPC connection with a timeout (for callers that want to wait for reconnection)
+   */
+  async waitForConnection(timeoutMs: number = 10000): Promise<void> {
+    if (!rpcClient) {
+      throw new Error('Kaspa client not initialized')
+    }
+    if (this.isConnected()) return
+
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      if (this.isConnected()) return
+    }
+    throw new Error(`Kaspa RPC did not reconnect within ${timeoutMs}ms`)
   }
 
   /**
@@ -186,10 +229,12 @@ class KaspaClient {
   }
 
   /**
-   * Check if client is connected
+   * Check if client is connected (uses rpcClient.isConnected for real-time status)
    */
   isConnected(): boolean {
-    return this.initialized && rpcClient !== null
+    if (!this.initialized || !rpcClient) return false
+    if (typeof rpcClient.isConnected !== 'undefined') return rpcClient.isConnected
+    return true
   }
 }
 

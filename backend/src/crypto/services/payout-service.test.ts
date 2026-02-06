@@ -23,6 +23,7 @@ vi.mock('../kaspa-client.js', () => ({
   kaspaClient: {
     getUtxosByAddress: vi.fn(),
     submitTransaction: vi.fn(),
+    isConnected: vi.fn().mockReturnValue(true),
   },
 }))
 
@@ -266,6 +267,88 @@ describe('PayoutService', () => {
       }
 
       expect(walletManager.deriveSeatKeypair).toHaveBeenCalledWith('room-456', 0)
+    })
+  })
+
+  describe('retry on connection errors', () => {
+    it('should retry sendPayout on connection error and eventually throw', async () => {
+      vi.mocked(store.getRoom).mockReturnValue({
+        id: 'room-123',
+        depositAddress: 'kaspatest:deposit',
+        seats: [
+          { index: 0, depositAddress: 'kaspatest:seat0' },
+        ],
+      } as any)
+      vi.mocked(store.getPayouts).mockReturnValue([
+        { roomId: 'room-123', userId: 'user1', address: 'kaspatest:winner1', amount: 1.5 },
+      ])
+      // Fail with a connection error every time
+      vi.mocked(kaspaClient.getUtxosByAddress).mockRejectedValue(new Error('RPC connection timeout'))
+
+      await expect(payoutService.sendPayout('room-123')).rejects.toThrow('RPC connection timeout')
+
+      // Should have retried 3 times (3 attempts total)
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(3)
+    }, 15000)
+
+    it('should not retry sendPayout on business logic error', async () => {
+      vi.mocked(store.getRoom).mockReturnValue({
+        id: 'room-123',
+        depositAddress: 'kaspatest:deposit',
+        seats: [
+          { index: 0, depositAddress: 'kaspatest:seat0' },
+        ],
+      } as any)
+      vi.mocked(store.getPayouts).mockReturnValue([
+        { roomId: 'room-123', userId: 'user1', address: 'kaspatest:winner1', amount: 1.5 },
+      ])
+      vi.mocked(kaspaClient.getUtxosByAddress).mockResolvedValue({
+        utxos: [],
+        totalAmount: 0n,
+      })
+
+      // "No UTXOs found" is a business logic error, should not retry
+      await expect(payoutService.sendPayout('room-123')).rejects.toThrow('No UTXOs found')
+
+      // Only called once per seat (1 attempt, no retries)
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(1)
+    })
+
+    it('should retry sendRefunds on connection error and eventually throw', async () => {
+      vi.mocked(store.getRoom).mockReturnValue({
+        id: 'room-123',
+        depositAddress: 'kaspatest:deposit',
+        seats: [
+          { index: 0, depositAddress: 'kaspatest:seat0', walletAddress: 'kaspatest:player1', confirmed: true },
+        ],
+      } as any)
+      vi.mocked(kaspaClient.getUtxosByAddress).mockRejectedValue(new Error('ECONNRESET'))
+
+      await expect(payoutService.sendRefunds('room-123')).rejects.toThrow('ECONNRESET')
+
+      // Should have retried 3 times
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(3)
+    }, 15000)
+
+    it('should not retry sendRefunds on business logic error', async () => {
+      vi.mocked(store.getRoom).mockReturnValue({
+        id: 'room-123',
+        depositAddress: 'kaspatest:deposit',
+        seats: [
+          { index: 0, depositAddress: 'kaspatest:seat0', walletAddress: 'kaspatest:player1', confirmed: true },
+        ],
+      } as any)
+      // No UTXOs found - returns [] immediately without retrying
+      vi.mocked(kaspaClient.getUtxosByAddress).mockResolvedValue({
+        utxos: [],
+        totalAmount: 0n,
+      })
+
+      const result = await payoutService.sendRefunds('room-123')
+      expect(result).toEqual([])
+
+      // Only called once (no retry needed)
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(1)
     })
   })
 })

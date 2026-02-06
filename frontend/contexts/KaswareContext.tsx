@@ -8,6 +8,8 @@ import type { KaswareWallet } from '../types/kasware'
 
 // Expected network from environment (mainnet or testnet-10)
 const EXPECTED_NETWORK = process.env.NEXT_PUBLIC_NETWORK || 'mainnet'
+// Wallet API uses kaspa_ prefix format (kaspa_mainnet, kaspa_testnet_10, etc.)
+const WALLET_NETWORK = 'kaspa_' + EXPECTED_NETWORK.replace('-', '_')
 
 interface KaswareContextValue {
   address: string | null
@@ -85,17 +87,30 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         throw new Error('No accounts found')
       }
 
-      const currentAddress = accounts[0]
-      const currentNetwork = await kasware.getNetwork()
-      const currentBalance = await kasware.getBalance()
+      let currentAddress = accounts[0]
+      let currentNetwork = await kasware.getNetwork()
+      let currentBalance = await kasware.getBalance()
 
-      // Check for network mismatch
+      // Auto-switch network if wallet is on the wrong one
       const isTestnet = currentNetwork.includes('testnet')
       const expectedIsTestnet = EXPECTED_NETWORK.includes('testnet')
       if (isTestnet !== expectedIsTestnet) {
-        const expectedName = expectedIsTestnet ? 'Testnet' : 'Mainnet'
-        const actualName = isTestnet ? 'Testnet' : 'Mainnet'
-        setError(`Network mismatch: Your wallet is on ${actualName}, but this app requires ${expectedName}. Please switch your wallet network.`)
+        try {
+          await kasware.switchNetwork(WALLET_NETWORK)
+          // Re-fetch state after network switch (address changes between networks)
+          // Use getAccounts() not requestAccounts() — wallet already approved, avoids second popup
+          currentNetwork = await kasware.getNetwork()
+          const newAccounts = await kasware.getAccounts()
+          if (newAccounts.length === 0) {
+            throw new Error('No accounts found after network switch')
+          }
+          currentAddress = newAccounts[0]
+          currentBalance = await kasware.getBalance()
+        } catch {
+          const expectedName = expectedIsTestnet ? 'Testnet' : 'Mainnet'
+          setError(`This app requires ${expectedName}. Please switch your wallet network and try again.`)
+          return
+        }
       }
 
       setAddress(currentAddress)
@@ -185,8 +200,10 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
   )
 
   // Refs for stable event handler references (prevents memory leaks from stale listeners)
+  const connectedRef = useRef(connected)
   const disconnectRef = useRef(disconnect)
   const refreshBalanceRef = useRef(refreshBalance)
+  connectedRef.current = connected
   disconnectRef.current = disconnect
   refreshBalanceRef.current = refreshBalance
 
@@ -204,18 +221,24 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    const handleNetworkChanged = (newNetwork: string) => {
+    const handleNetworkChanged = async (newNetwork: string) => {
       setNetwork(newNetwork)
-      // Check for network mismatch when network changes
       const isTestnet = newNetwork.includes('testnet')
       const expectedIsTestnet = EXPECTED_NETWORK.includes('testnet')
       if (isTestnet !== expectedIsTestnet) {
-        const expectedName = expectedIsTestnet ? 'Testnet' : 'Mainnet'
-        const actualName = isTestnet ? 'Testnet' : 'Mainnet'
-        setError(`Network mismatch: Your wallet is on ${actualName}, but this app requires ${expectedName}. Please switch your wallet network.`)
+        // Auto-switch back to the required network if user is connected
+        if (connectedRef.current) {
+          try {
+            await kasware.switchNetwork(WALLET_NETWORK)
+          } catch {
+            const expectedName = expectedIsTestnet ? 'Testnet' : 'Mainnet'
+            disconnectRef.current()
+            setError(`This app requires ${expectedName}. Please switch your wallet network.`)
+          }
+        }
       } else {
         // Clear network-related error if network now matches
-        setError(prev => prev?.includes('Network mismatch') ? null : prev)
+        setError(prev => prev?.includes('requires') ? null : prev)
       }
     }
 

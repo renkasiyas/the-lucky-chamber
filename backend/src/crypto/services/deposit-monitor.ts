@@ -19,6 +19,7 @@ export class DepositMonitor {
   private pollInterval: number
   private intervalHandle: NodeJS.Timeout | null = null
   private depositConfirmer: DepositConfirmer | null = null
+  private rpcDisconnectedLogged: boolean = false
 
   constructor(pollIntervalMs: number = 1000) {
     this.pollInterval = pollIntervalMs
@@ -73,6 +74,20 @@ export class DepositMonitor {
     if (!this.depositConfirmer) {
       logger.warn('Deposit confirmer not set, skipping check')
       return
+    }
+
+    // Skip entire poll cycle if RPC is disconnected (avoids log spam during outage)
+    if (!kaspaClient.isConnected()) {
+      if (!this.rpcDisconnectedLogged) {
+        this.rpcDisconnectedLogged = true
+        logger.warn('Deposit monitor skipping poll: Kaspa RPC disconnected')
+      }
+      return
+    }
+    // RPC is back, reset the log flag
+    if (this.rpcDisconnectedLogged) {
+      this.rpcDisconnectedLogged = false
+      logger.info('Deposit monitor resuming: Kaspa RPC reconnected')
     }
 
     const rooms = store.getAllRooms()
