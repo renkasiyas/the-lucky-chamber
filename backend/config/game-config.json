@@ -2,7 +2,7 @@
   "houseCutPercent": 5,
   "quickMatch": {
     "enabled": true,
-    "seatPrice": 10,
+    "seatPrice": 25,
     "minPlayers": 6,
     "maxPlayers": 6,
     "timeoutSeconds": 60
