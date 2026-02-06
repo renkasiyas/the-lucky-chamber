@@ -17,6 +17,7 @@ vi.mock('../../db/store.js', () => ({
 vi.mock('../kaspa-client.js', () => ({
   kaspaClient: {
     getUtxosByAddress: vi.fn(),
+    isConnected: vi.fn().mockReturnValue(true),
   },
 }))
 
@@ -266,8 +267,65 @@ describe('DepositMonitor', () => {
     })
   })
 
+  describe('RPC disconnection handling', () => {
+    it('should skip poll cycle when RPC is disconnected', async () => {
+      const room = createTestRoom()
+      vi.mocked(store.getAllRooms).mockReturnValue([room])
+      vi.mocked(kaspaClient.isConnected).mockReturnValue(false)
+      monitor.setDepositConfirmer(mockConfirmer)
+      monitor.start()
+
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Should not attempt any UTXO checks
+      expect(kaspaClient.getUtxosByAddress).not.toHaveBeenCalled()
+    })
+
+    it('should resume polling when RPC reconnects', async () => {
+      const room = createTestRoom()
+      vi.mocked(store.getAllRooms).mockReturnValue([room])
+      vi.mocked(kaspaClient.getUtxosByAddress).mockResolvedValue({
+        utxos: [],
+        totalAmount: 0n,
+      })
+
+      // Start disconnected
+      vi.mocked(kaspaClient.isConnected).mockReturnValue(false)
+      monitor.setDepositConfirmer(mockConfirmer)
+      monitor.start()
+
+      await vi.advanceTimersByTimeAsync(0)
+      expect(kaspaClient.getUtxosByAddress).not.toHaveBeenCalled()
+
+      // Reconnect
+      vi.mocked(kaspaClient.isConnected).mockReturnValue(true)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalled()
+    })
+
+    it('should only log disconnection warning once', async () => {
+      const { logger } = await import('../../utils/logger.js')
+      const room = createTestRoom()
+      vi.mocked(store.getAllRooms).mockReturnValue([room])
+      vi.mocked(kaspaClient.isConnected).mockReturnValue(false)
+      monitor.setDepositConfirmer(mockConfirmer)
+      monitor.start()
+
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(1000)
+
+      // Should only log the disconnection warning once, not every poll
+      const disconnectCalls = vi.mocked(logger.warn).mock.calls.filter(
+        call => typeof call[0] === 'string' && call[0].includes('skipping poll')
+      )
+      expect(disconnectCalls).toHaveLength(1)
+    })
+  })
+
   describe('error handling in start catch blocks', () => {
     it('should catch and log errors from initial check', async () => {
+      vi.mocked(kaspaClient.isConnected).mockReturnValue(true)
       // Make getAllRooms throw to trigger the initial check catch block
       vi.mocked(store.getAllRooms).mockImplementation(() => {
         throw new Error('Store error')
@@ -282,6 +340,7 @@ describe('DepositMonitor', () => {
     })
 
     it('should catch and log errors from interval check', async () => {
+      vi.mocked(kaspaClient.isConnected).mockReturnValue(true)
       const { logger } = await import('../../utils/logger.js')
       vi.mocked(store.getAllRooms)
         .mockReturnValueOnce([]) // Initial check succeeds

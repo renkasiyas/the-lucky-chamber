@@ -204,8 +204,8 @@ describe('useKNS', () => {
       json: async () => ({ domain: mockDomain }),
     })
 
-    const { result, rerender } = renderHook(({ addr }) => useKNS(addr), {
-      initialProps: { addr: mockAddress },
+    const { result, rerender } = renderHook(({ addr }: { addr: string | null }) => useKNS(addr), {
+      initialProps: { addr: mockAddress as string | null },
     })
 
     await waitFor(() => {

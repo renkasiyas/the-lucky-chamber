@@ -33,6 +33,7 @@ export function GameFinishedOverlay({
   const [showVerifier, setShowVerifier] = useState(false)
   const { play: playSound } = useSound()
   const resultsShownRef = useRef(false)
+  const actionInProgressRef = useRef(false)
 
   const survivors = room.seats.filter(s => s.alive)
   const eliminated = room.seats.filter(s => s.walletAddress && !s.alive)
@@ -85,15 +86,19 @@ export function GameFinishedOverlay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only run once on mount - iAmSurvivor won't change
 
-  // Button handlers with explicit touch support for WebView
+  // Button handlers with guard against double-firing from onClick + onTouchEnd
   // Use setTimeout to delay DOM changes, allowing touch events to complete
   // This prevents iOS/Safari from getting confused when the overlay unmounts mid-touch
   const handleDismiss = () => {
+    if (actionInProgressRef.current) return
+    actionInProgressRef.current = true
     playSound('click')
     setTimeout(() => onDismiss(), 0)
   }
 
   const handlePlayAgain = () => {
+    if (actionInProgressRef.current) return
+    actionInProgressRef.current = true
     playSound('click')
     setTimeout(() => onPlayAgain(), 0)
   }

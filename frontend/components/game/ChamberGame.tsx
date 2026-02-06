@@ -10,7 +10,6 @@ import { useSound } from '../../hooks/useSound'
 
 interface ChamberGameProps {
   room: Room
-  currentRound: number
   myAddress: string | null
   onPullTrigger?: () => void
   onReadyForTurn?: () => void // Called when ready for turn (animations done, signals backend to start timer)
@@ -64,7 +63,7 @@ const TIMING = {
   respinRotations: 2,
 } as const
 
-export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onReadyForTurn, onFinalDeathAnimationComplete, onRoundRevealed, serverTimerDeadline }: ChamberGameProps) {
+export function ChamberGame({ room, myAddress, onPullTrigger, onReadyForTurn, onFinalDeathAnimationComplete, onRoundRevealed, serverTimerDeadline }: ChamberGameProps) {
   // ═══════════════════════════════════════════════════════════════════════════
   // STATE
   // ═══════════════════════════════════════════════════════════════════════════
@@ -77,6 +76,8 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
   const [revealChamberIndex, setRevealChamberIndex] = useState<number | null>(null) // Which chamber hole to highlight on reveal
   const [showDeathVignette, setShowDeathVignette] = useState(false) // Only show after death reveal completes
   const [activelyMyTurn, setActivelyMyTurn] = useState(false) // Lock: true from turn start until sequence done
+  // Tracks which round is visually displayed (updates when animation starts, not when server data arrives)
+  const [displayedRound, setDisplayedRound] = useState(room.rounds.length)
   // Visual shooter index - decoupled from room.currentTurnSeatIndex to prevent
   // seat indicators from updating before animations complete
   const [visualShooterIndex, setVisualShooterIndex] = useState<number>(room.currentTurnSeatIndex ?? -1)
@@ -561,12 +562,14 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
         if (phase === 'pulling') {
           // I pulled the trigger, reveal my result - process immediately
           lastProcessedRound.current = nextRound.index
+          setDisplayedRound(nextRound.index + 1)
           revealOutcome(nextRound.died, nextRound.shooterSeatIndex, true, nextRound.index) // true = my reveal
         } else if (phase === 'idle' || phase === 'ready') {
           // Server auto-fired (timeout) or result arrived before/after pulling
           // Treat it like a spectator reveal to avoid freezing - we missed our window
           if (animatingRound.current !== null) return // Wait for current animation, don't mark as processed
           lastProcessedRound.current = nextRound.index // Only mark AFTER guard passes
+          setDisplayedRound(nextRound.index + 1)
           runSpectatorSequence(nextRound.died, nextRound.shooterSeatIndex, nextRound.index)
         }
         // If in spin/reveal/respin, wait for animation to complete
@@ -578,6 +581,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
           return
         }
         lastProcessedRound.current = nextRound.index
+        setDisplayedRound(nextRound.index + 1)
         runSpectatorSequence(nextRound.died, nextRound.shooterSeatIndex, nextRound.index)
       }
     }
@@ -805,7 +809,7 @@ export function ChamberGame({ room, currentRound, myAddress, onPullTrigger, onRe
           <div className="text-center">
             <div className="text-[8px] md:text-[10px] font-mono text-ash/60 uppercase tracking-widest">Round</div>
             <div className="text-2xl md:text-3xl font-display text-gold">
-              {currentRound + 1}
+              {displayedRound}
             </div>
           </div>
         </div>

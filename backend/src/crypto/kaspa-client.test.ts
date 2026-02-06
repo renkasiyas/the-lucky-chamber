@@ -11,6 +11,8 @@ const mockRpcClient = {
   getUtxosByAddresses: vi.fn(),
   submitTransaction: vi.fn(),
   getBlockDagInfo: vi.fn(),
+  addEventListener: vi.fn(),
+  isConnected: true,
 }
 
 // Mock kaspa-wasm with class constructors
@@ -188,8 +190,62 @@ describe('KaspaClient', () => {
     })
   })
 
+  describe('isConnected', () => {
+    it('should return true when rpcClient.isConnected is true', async () => {
+      mockRpcClient.isConnected = true
+      await kaspaClient.initialize()
+      expect(kaspaClient.isConnected()).toBe(true)
+    })
+
+    it('should return false when rpcClient.isConnected is false', async () => {
+      await kaspaClient.initialize()
+      mockRpcClient.isConnected = false
+      expect(kaspaClient.isConnected()).toBe(false)
+    })
+  })
+
+  describe('ensureConnected', () => {
+    it('should not throw when connected', async () => {
+      mockRpcClient.isConnected = true
+      await kaspaClient.initialize()
+      expect(() => kaspaClient.ensureConnected()).not.toThrow()
+    })
+
+    it('should throw when rpcClient.isConnected is false', async () => {
+      await kaspaClient.initialize()
+      mockRpcClient.isConnected = false
+      expect(() => kaspaClient.ensureConnected()).toThrow('Kaspa RPC is not connected')
+    })
+  })
+
+  describe('waitForConnection', () => {
+    it('should resolve immediately if already connected', async () => {
+      mockRpcClient.isConnected = true
+      await kaspaClient.initialize()
+      await expect(kaspaClient.waitForConnection(1000)).resolves.not.toThrow()
+    })
+
+    it('should reject after timeout if not connected', async () => {
+      await kaspaClient.initialize()
+      mockRpcClient.isConnected = false
+      await expect(kaspaClient.waitForConnection(600)).rejects.toThrow('did not reconnect within 600ms')
+    })
+  })
+
+  describe('event listeners', () => {
+    it('should register connect and disconnect event listeners on initialize', async () => {
+      // Disconnect to reset initialized state, then re-initialize
+      await kaspaClient.disconnect()
+      mockRpcClient.isConnected = true
+      await kaspaClient.initialize()
+      expect(mockRpcClient.addEventListener).toHaveBeenCalledWith('connect', expect.any(Function))
+      expect(mockRpcClient.addEventListener).toHaveBeenCalledWith('disconnect', expect.any(Function))
+    })
+  })
+
   describe('disconnect', () => {
     it('should disconnect from the network', async () => {
+      mockRpcClient.isConnected = true
       await kaspaClient.initialize()
       await kaspaClient.disconnect()
 

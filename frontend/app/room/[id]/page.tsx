@@ -829,7 +829,6 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             <CardContent className="!p-1 md:!p-6 !pt-2 md:!pt-6">
               <ChamberGame
                 room={room}
-                currentRound={room.rounds.length}
                 myAddress={address}
                 onPullTrigger={handlePullTrigger}
                 onReadyForTurn={handleReadyForTurn}

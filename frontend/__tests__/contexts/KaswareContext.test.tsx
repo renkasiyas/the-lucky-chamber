@@ -7,11 +7,11 @@ import { ReactNode } from 'react'
 import { KaswareProvider, useKaswareContext } from '../../contexts/KaswareContext'
 import type { KaswareWallet } from '../../types/kasware'
 
-// Mock wallet instance
+// Mock wallet instance - uses mainnet to match default expectedNetwork
 const createMockWallet = (): KaswareWallet => ({
-  requestAccounts: vi.fn(async () => ['kaspatest:qq1234567890']),
+  requestAccounts: vi.fn(async () => ['kaspa:qq1234567890abcdefghijklmnop']),
   getAccounts: vi.fn(async () => []),
-  getNetwork: vi.fn(async () => 'testnet-10'),
+  getNetwork: vi.fn(async () => 'mainnet'),
   switchNetwork: vi.fn(async () => {}),
   getPublicKey: vi.fn(async () => 'mock-public-key'),
   getBalance: vi.fn(async () => ({
@@ -111,8 +111,8 @@ describe('KaswareContext', () => {
     expect(mockWallet.getBalance).toHaveBeenCalled()
 
     expect(result.current.connected).toBe(true)
-    expect(result.current.address).toBe('kaspatest:qq1234567890')
-    expect(result.current.network).toBe('testnet-10')
+    expect(result.current.address).toBe('kaspa:qq1234567890abcdefghijklmnop')
+    expect(result.current.network).toBe('mainnet')
     expect(result.current.balance).toEqual({
       total: '100000000',
       confirmed: '100000000',
@@ -361,6 +361,109 @@ describe('KaswareContext', () => {
     })
 
     expect(result.current.network).toBe('mainnet')
+  })
+
+  it('auto-switches network on connect when wallet is on wrong network', async () => {
+    // Wallet starts on testnet, but app expects mainnet
+    mockWallet.getNetwork = vi.fn()
+      .mockResolvedValueOnce('testnet-10')  // Initial check after requestAccounts
+      .mockResolvedValueOnce('mainnet')      // After switch
+    mockWallet.requestAccounts = vi.fn()
+      .mockResolvedValueOnce(['kaspatest:qqtestnet123'])  // Before switch
+    mockWallet.getAccounts = vi.fn()
+      .mockResolvedValueOnce([])                      // Init effect check
+      .mockResolvedValueOnce(['kaspa:qqmainnet456'])  // After switch (no popup needed)
+    mockWallet.getBalance = vi.fn()
+      .mockResolvedValueOnce({ total: '50', confirmed: '50', unconfirmed: '0' })   // Before switch
+      .mockResolvedValueOnce({ total: '100', confirmed: '100', unconfirmed: '0' }) // After switch
+
+    const { result } = renderHook(() => useKaswareContext(), { wrapper })
+
+    await act(async () => {
+      await result.current.connect()
+    })
+
+    expect(mockWallet.switchNetwork).toHaveBeenCalledWith('kaspa_mainnet')
+    expect(result.current.connected).toBe(true)
+    expect(result.current.address).toBe('kaspa:qqmainnet456')
+    expect(result.current.network).toBe('mainnet')
+  })
+
+  it('blocks connection when network switch is declined', async () => {
+    // Wallet on testnet, switch rejected by user
+    mockWallet.getNetwork = vi.fn(async () => 'testnet-10')
+    mockWallet.switchNetwork = vi.fn(async () => { throw new Error('User rejected') })
+
+    const { result } = renderHook(() => useKaswareContext(), { wrapper })
+
+    await act(async () => {
+      await result.current.connect()
+    })
+
+    expect(mockWallet.switchNetwork).toHaveBeenCalledWith('kaspa_mainnet')
+    expect(result.current.connected).toBe(false)
+    expect(result.current.error).toContain('requires Mainnet')
+  })
+
+  it('auto-switches back on runtime network change to wrong network', async () => {
+    const { result } = renderHook(() => useKaswareContext(), { wrapper })
+
+    await act(async () => {
+      await result.current.connect()
+    })
+
+    const networkChangedHandler = (mockWallet.on as any).mock.calls
+      .find((call: any) => call[0] === 'networkChanged')?.[1]
+
+    // Simulate user switching to testnet in wallet
+    await act(async () => {
+      await networkChangedHandler('testnet-10')
+    })
+
+    expect(mockWallet.switchNetwork).toHaveBeenCalledWith('kaspa_mainnet')
+  })
+
+  it('disconnects on runtime network mismatch if switch fails', async () => {
+    const { result } = renderHook(() => useKaswareContext(), { wrapper })
+
+    await act(async () => {
+      await result.current.connect()
+    })
+
+    expect(result.current.connected).toBe(true)
+
+    // Make switchNetwork fail
+    mockWallet.switchNetwork = vi.fn(async () => { throw new Error('User rejected') })
+
+    const networkChangedHandler = (mockWallet.on as any).mock.calls
+      .find((call: any) => call[0] === 'networkChanged')?.[1]
+
+    // Simulate user switching to testnet in wallet
+    await act(async () => {
+      await networkChangedHandler('testnet-10')
+    })
+
+    expect(result.current.connected).toBe(false)
+    expect(result.current.error).toContain('requires Mainnet')
+  })
+
+  it('does not auto-switch when not connected and network changes', async () => {
+    renderHook(() => useKaswareContext(), { wrapper })
+
+    // Wait for initialization
+    await waitFor(() => {}, { timeout: 500 })
+
+    const networkChangedHandler = (mockWallet.on as any).mock.calls
+      .find((call: any) => call[0] === 'networkChanged')?.[1]
+
+    if (networkChangedHandler) {
+      await act(async () => {
+        await networkChangedHandler('testnet-10')
+      })
+    }
+
+    // Should not attempt to switch when not connected
+    expect(mockWallet.switchNetwork).not.toHaveBeenCalled()
   })
 
   it('clears disconnect flag on explicit connect', async () => {

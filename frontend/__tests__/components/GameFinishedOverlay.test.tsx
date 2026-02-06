@@ -2,8 +2,7 @@
 // ABOUTME: Tests victory/defeat states, payouts, and user interactions
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { GameFinishedOverlay } from '../../components/game/GameFinishedOverlay'
 import type { Room } from '../../../shared/index'
 
@@ -39,24 +38,30 @@ vi.mock('framer-motion', () => ({
 describe('GameFinishedOverlay', () => {
   const createMockRoom = (overrides?: Partial<Room>): Room => ({
     id: 'room-123',
+    mode: 'REGULAR',
     state: 'SETTLED',
     seatPrice: 10,
+    maxPlayers: 6,
+    minPlayers: 6,
     houseCutPercent: 5,
     currentTurnSeatIndex: null,
-    minConfirmations: 2,
-    turnTimeoutSeconds: 30,
     settlementBlockHeight: 1000,
+    settlementBlockHash: 'block-hash-123',
+    lockHeight: 995,
+    depositAddress: 'kaspa:deposit123',
+    serverCommit: 'commit-hash',
+    serverSeed: 'revealed-seed',
     createdAt: Date.now(),
+    updatedAt: Date.now(),
+    expiresAt: Date.now() + 3600000,
     seats: [
-      { index: 0, walletAddress: 'player1', depositAddress: 'dep1', confirmed: true, confirmedAt: 100, alive: true, knsProfile: null },
-      { index: 1, walletAddress: 'player2', depositAddress: 'dep2', confirmed: true, confirmedAt: 200, alive: false, knsProfile: null },
-      { index: 2, walletAddress: 'player3', depositAddress: 'dep3', confirmed: true, confirmedAt: 300, alive: true, knsProfile: null },
+      { index: 0, walletAddress: 'player1', depositAddress: 'dep1', depositTxId: 'tx1', amount: 10, confirmed: true, confirmedAt: 100, clientSeed: 'seed1', alive: true, knsName: null, avatarUrl: null },
+      { index: 1, walletAddress: 'player2', depositAddress: 'dep2', depositTxId: 'tx2', amount: 10, confirmed: true, confirmedAt: 200, clientSeed: 'seed2', alive: false, knsName: null, avatarUrl: null },
+      { index: 2, walletAddress: 'player3', depositAddress: 'dep3', depositTxId: 'tx3', amount: 10, confirmed: true, confirmedAt: 300, clientSeed: 'seed3', alive: true, knsName: null, avatarUrl: null },
     ],
     rounds: [
-      { index: 0, eliminatedSeatIndex: 1, blockHash: 'hash1', combinedSeed: 'seed1', timestamp: Date.now() },
+      { index: 0, shooterSeatIndex: 1, targetSeatIndex: 1, died: true, randomness: 'abc123', timestamp: Date.now() },
     ],
-    serverSeedHash: 'hash',
-    revealedServerSeed: 'revealed',
     payoutTxId: 'tx123',
     ...overrides,
   })
@@ -103,14 +108,12 @@ describe('GameFinishedOverlay', () => {
     // Should show reveal phase initially
     expect(screen.getByText('VICTORY!')).toBeInTheDocument()
 
-    // Advance timers to trigger phase transition
-    await act(async () => { await vi.runAllTimersAsync() })
+    // Advance timers to trigger phase transition (2000ms + buffer)
+    act(() => { vi.advanceTimersByTime(2100) })
 
     // Should show results phase
-    await waitFor(() => {
-      expect(screen.getByText('VICTORY')).toBeInTheDocument() // Results phase title
-      expect(screen.getByText(/You walked away alive!/i)).toBeInTheDocument()
-    })
+    expect(screen.getByText('VICTORY')).toBeInTheDocument() // Results phase title
+    expect(screen.getByText(/You walked away alive!/i)).toBeInTheDocument()
   })
 
   it('calls onResultsShown callback on mount', () => {
@@ -132,64 +135,61 @@ describe('GameFinishedOverlay', () => {
     expect(onResultsShown).toHaveBeenCalledTimes(1)
   })
 
-  it('displays correct survivor and eliminated counts', async () => {
-    render(<GameFinishedOverlay {...defaultProps} />)
+  it('displays correct survivor and eliminated counts', () => {
+    const { container } = render(<GameFinishedOverlay {...defaultProps} />)
 
     // Transition to results
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.getByText('2')).toBeInTheDocument() // 2 survivors
-      expect(screen.getByText('survived')).toBeInTheDocument()
-      expect(screen.getByText('1')).toBeInTheDocument() // 1 eliminated
-      expect(screen.getByText('eliminated')).toBeInTheDocument()
-    })
+    // Find elements by class - using text-lg to distinguish from the title
+    const survivorCount = container.querySelector('.text-alive-light.font-display.text-lg')
+    const eliminatedCount = container.querySelector('.text-blood-light.font-display.text-lg')
+    expect(survivorCount?.textContent).toBe('2')
+    expect(eliminatedCount?.textContent).toBe('1')
+    expect(screen.getByText('survived')).toBeInTheDocument()
+    expect(screen.getByText('eliminated')).toBeInTheDocument()
   })
 
-  it('calculates and displays correct payout for survivor', async () => {
-    render(<GameFinishedOverlay {...defaultProps} />)
+  it('calculates and displays correct payout for survivor', () => {
+    const { container } = render(<GameFinishedOverlay {...defaultProps} />)
 
     // Transition to results
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      // Total pot: 3 * 10 = 30 KAS
-      // House cut: 30 * 0.05 = 1.5 KAS
-      // Per survivor: (30 - 1.5) / 2 = 14.25 KAS
-      expect(screen.getByText('Your Winnings')).toBeInTheDocument()
-      expect(screen.getByText('14.25')).toBeInTheDocument()
-    })
+    // Total pot: 3 * 10 = 30 KAS
+    // House cut: 30 * 0.05 = 1.5 KAS
+    // Per survivor: (30 - 1.5) / 2 = 14.25 KAS
+    expect(screen.getByText('Your Winnings')).toBeInTheDocument()
+    // Find the payout amount in the winnings section (has text-4xl class)
+    const winningsAmount = container.querySelector('.text-4xl.text-alive-light')
+    expect(winningsAmount?.textContent).toBe('14.25')
   })
 
-  it('displays total pot in stats grid', async () => {
+  it('displays total pot in stats grid', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.getByText('Total Pot')).toBeInTheDocument()
-      expect(screen.getByText('30')).toBeInTheDocument() // 3 players * 10 KAS
-    })
+    expect(screen.getByText('Total Pot')).toBeInTheDocument()
+    expect(screen.getByText('30')).toBeInTheDocument() // 3 players * 10 KAS
   })
 
-  it('displays transaction link when payoutTxId is present', async () => {
+  it('displays transaction link when payoutTxId is present', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.getByText('Transaction')).toBeInTheDocument()
-      const link = screen.getByRole('link', { name: /tx123/i })
-      expect(link).toHaveAttribute(
-        'href',
-        'https://explorer.kaspa.org/transactions/tx123'
-      )
-      expect(link).toHaveAttribute('target', '_blank')
-      expect(link).toHaveAttribute('rel', 'noopener noreferrer')
-    })
+    expect(screen.getByText('Transaction')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /tx123/i })
+    expect(link).toHaveAttribute(
+      'href',
+      'https://explorer.kaspa.org/transactions/tx123'
+    )
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
-  it('does not display transaction link when payoutTxId is payout_failed', async () => {
+  it('does not display transaction link when payoutTxId is payout_failed', () => {
     const props = {
       ...defaultProps,
       room: createMockRoom({ payoutTxId: 'payout_failed' }),
@@ -197,14 +197,12 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.queryByText('Transaction')).not.toBeInTheDocument()
-    })
+    expect(screen.queryByText('Transaction')).not.toBeInTheDocument()
   })
 
-  it('does not display transaction link when payoutTxId is missing', async () => {
+  it('does not display transaction link when payoutTxId is missing', () => {
     const props = {
       ...defaultProps,
       room: createMockRoom({ payoutTxId: undefined }),
@@ -212,149 +210,129 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.queryByText('Transaction')).not.toBeInTheDocument()
-    })
+    expect(screen.queryByText('Transaction')).not.toBeInTheDocument()
   })
 
-  it('calls onDismiss when close button is clicked', async () => {
-    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
+  it('calls onDismiss when close button is clicked', () => {
     const onDismiss = vi.fn()
 
     render(<GameFinishedOverlay {...defaultProps} onDismiss={onDismiss} />)
 
     const closeButton = screen.getByLabelText('Close')
-    await user.click(closeButton)
-    await vi.runAllTimersAsync()
+    fireEvent.click(closeButton)
+    act(() => { vi.advanceTimersByTime(100) })
 
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
-  it('calls onDismiss when DETAILS button is clicked', async () => {
-    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
+  it('calls onDismiss when DETAILS button is clicked', () => {
     const onDismiss = vi.fn()
 
     render(<GameFinishedOverlay {...defaultProps} onDismiss={onDismiss} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    // Transition to results phase where DETAILS button appears
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    const detailsButton = await screen.findByText('DETAILS')
-    await user.click(detailsButton)
-    await vi.runAllTimersAsync()
+    const detailsButton = screen.getByText('DETAILS')
+    fireEvent.click(detailsButton)
+    act(() => { vi.advanceTimersByTime(100) })
 
     expect(onDismiss).toHaveBeenCalledTimes(1)
   })
 
-  it('calls onPlayAgain when PLAY AGAIN button is clicked', async () => {
-    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
+  it('calls onPlayAgain when PLAY AGAIN button is clicked', () => {
     const onPlayAgain = vi.fn()
 
     render(<GameFinishedOverlay {...defaultProps} onPlayAgain={onPlayAgain} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    // Transition to results phase where PLAY AGAIN button appears
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    const playAgainButton = await screen.findByText('PLAY AGAIN')
-    await user.click(playAgainButton)
-    await vi.runAllTimersAsync()
+    const playAgainButton = screen.getByText('PLAY AGAIN')
+    fireEvent.click(playAgainButton)
+    act(() => { vi.advanceTimersByTime(100) })
 
     expect(onPlayAgain).toHaveBeenCalledTimes(1)
   })
 
-  it('opens provably fair modal when VERIFY FAIRNESS button is clicked', async () => {
-    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
-
+  it('opens provably fair modal when VERIFY FAIRNESS button is clicked', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    const verifyButton = await screen.findByText('VERIFY FAIRNESS')
-    await user.click(verifyButton)
-    await vi.runAllTimersAsync()
+    const verifyButton = screen.getByText('VERIFY FAIRNESS')
+    fireEvent.click(verifyButton)
 
     expect(screen.getByTestId('provably-fair-modal')).toBeInTheDocument()
   })
 
-  it('hides close button when provably fair modal is open', async () => {
-    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
-
+  it('hides close button when provably fair modal is open', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    const verifyButton = await screen.findByText('VERIFY FAIRNESS')
-    await user.click(verifyButton)
-    await vi.runAllTimersAsync()
+    const verifyButton = screen.getByText('VERIFY FAIRNESS')
+    fireEvent.click(verifyButton)
 
     expect(screen.queryByLabelText('Close')).not.toBeInTheDocument()
   })
 
-  it('closes provably fair modal', async () => {
-    const user = userEvent.setup({ delay: null, advanceTimers: vi.advanceTimersByTime })
-
+  it('closes provably fair modal', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    const verifyButton = await screen.findByText('VERIFY FAIRNESS')
-    await user.click(verifyButton)
-    await vi.runAllTimersAsync()
+    const verifyButton = screen.getByText('VERIFY FAIRNESS')
+    fireEvent.click(verifyButton)
 
     const closeModalButton = screen.getByText('Close Modal')
-    await user.click(closeModalButton)
-    await vi.runAllTimersAsync()
+    fireEvent.click(closeModalButton)
 
-    await waitFor(() => {
-      expect(screen.queryByTestId('provably-fair-modal')).not.toBeInTheDocument()
-    })
+    expect(screen.queryByTestId('provably-fair-modal')).not.toBeInTheDocument()
   })
 
-  it('displays player seats sorted by payment order', async () => {
+  it('displays player seats sorted by payment order', () => {
+    const { container } = render(<GameFinishedOverlay {...defaultProps} />)
+
+    act(() => { vi.advanceTimersByTime(2100) })
+
+    // Should display 3 seat indicators (only confirmed players)
+    // Each seat is a div with w-10 h-10 rounded-full
+    const seatIndicators = container.querySelectorAll('.w-10.h-10.rounded-full')
+    expect(seatIndicators).toHaveLength(3)
+  })
+
+  it('highlights current player seat with gold styling', () => {
+    const { container } = render(<GameFinishedOverlay {...defaultProps} />)
+
+    act(() => { vi.advanceTimersByTime(2100) })
+
+    // The current player's seat gets gold styling (border-gold class)
+    const goldSeat = container.querySelector('.border-gold')
+    expect(goldSeat).toBeInTheDocument()
+  })
+
+  it('marks eliminated players with ✕ symbol', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      // Should display 3 seat indicators (only confirmed players)
-      const seats = screen.getAllByText(/^[1-3✕]$/)
-      expect(seats).toHaveLength(3)
-    })
+    const eliminated = screen.getByText('✕')
+    expect(eliminated).toBeInTheDocument()
   })
 
-  it('highlights current player seat with YOU label', async () => {
+  it('shows victory emoji and title for winner', () => {
     render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.getByText('YOU')).toBeInTheDocument()
-    })
+    expect(screen.getByText('🏆')).toBeInTheDocument()
+    expect(screen.getByText('VICTORY')).toBeInTheDocument()
   })
 
-  it('marks eliminated players with ✕ symbol', async () => {
-    render(<GameFinishedOverlay {...defaultProps} />)
-
-    await act(async () => { await vi.runAllTimersAsync() })
-
-    await waitFor(() => {
-      const eliminated = screen.getByText('✕')
-      expect(eliminated).toBeInTheDocument()
-    })
-  })
-
-  it('shows victory emoji and title for winner', async () => {
-    render(<GameFinishedOverlay {...defaultProps} />)
-
-    await act(async () => { await vi.runAllTimersAsync() })
-
-    await waitFor(() => {
-      expect(screen.getByText('🏆')).toBeInTheDocument()
-      expect(screen.getByText('VICTORY')).toBeInTheDocument()
-    })
-  })
-
-  it('shows defeat emoji and title for loser', async () => {
+  it('shows defeat emoji and title for loser', () => {
     const props = {
       ...defaultProps,
       myAddress: 'player2',
@@ -362,34 +340,27 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.getByText('💀')).toBeInTheDocument()
-      expect(screen.getByText('ELIMINATED')).toBeInTheDocument()
-    })
+    expect(screen.getByText('💀')).toBeInTheDocument()
+    expect(screen.getByText('ELIMINATED')).toBeInTheDocument()
   })
 
-  it('shows winnings section only for survivors', async () => {
+  it('shows winnings section only for survivors', () => {
     const { rerender } = render(<GameFinishedOverlay {...defaultProps} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      expect(screen.getByText('Your Winnings')).toBeInTheDocument()
-    })
+    expect(screen.getByText('Your Winnings')).toBeInTheDocument()
 
     // Rerender as eliminated player
     rerender(<GameFinishedOverlay {...defaultProps} myAddress="player2" />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
-
-    await waitFor(() => {
-      expect(screen.queryByText('Your Winnings')).not.toBeInTheDocument()
-    })
+    // No need to advance timers again - state is already in results phase
+    expect(screen.queryByText('Your Winnings')).not.toBeInTheDocument()
   })
 
-  it('handles player with null address', async () => {
+  it('handles player with null address', () => {
     const props = {
       ...defaultProps,
       myAddress: null,
@@ -397,12 +368,10 @@ describe('GameFinishedOverlay', () => {
 
     render(<GameFinishedOverlay {...props} />)
 
-    await act(async () => { await vi.runAllTimersAsync() })
+    act(() => { vi.advanceTimersByTime(2100) })
 
-    await waitFor(() => {
-      // Should not crash, show defeat state
-      expect(screen.getByText('ELIMINATED')).toBeInTheDocument()
-      expect(screen.queryByText('Your Winnings')).not.toBeInTheDocument()
-    })
+    // Should not crash, show defeat state
+    expect(screen.getByText('ELIMINATED')).toBeInTheDocument()
+    expect(screen.queryByText('Your Winnings')).not.toBeInTheDocument()
   })
 })
