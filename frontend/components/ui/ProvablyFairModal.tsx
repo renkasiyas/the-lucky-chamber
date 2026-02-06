@@ -527,8 +527,9 @@ export function ProvablyFairButton({
     <>
       <button
         onClick={() => { play('click'); setIsOpen(true) }}
+        aria-label="Provably fair verification"
         className={`
-          inline-flex items-center gap-2 px-4 py-2
+          inline-flex items-center gap-2 px-2.5 sm:px-4 py-2
           text-sm font-display tracking-wide text-gold hover:text-gold-light
           bg-gold/10 border border-gold/30 hover:border-gold/50 rounded-full
           transition-all
@@ -543,7 +544,7 @@ export function ProvablyFairButton({
             clipRule="evenodd"
           />
         </svg>
-        PROVABLY FAIR
+        <span className="hidden sm:inline">PROVABLY FAIR</span>
       </button>
 
       <ProvablyFairModal

@@ -78,7 +78,7 @@ describe('Card', () => {
 
       const header = container.querySelector('.border-b')
       expect(header).toHaveClass('flex', 'items-center', 'justify-between', 'gap-4')
-      expect(header).toHaveClass('px-5', 'py-4', 'border-edge')
+      expect(header).toHaveClass('px-3', 'py-3', 'border-edge')
     })
 
     it('applies custom className', () => {
