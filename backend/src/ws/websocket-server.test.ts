@@ -173,6 +173,170 @@ describe('WSServer', () => {
     })
   })
 
+  describe('IDENTIFY event', () => {
+    it('should set wallet address and update connection count', async () => {
+      const { ws } = await connectAndCapture()
+
+      expect(wsServer.getConnectionCount()).toBe(0)
+
+      ws.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      expect(wsServer.getConnectionCount()).toBe(1)
+
+      ws.close()
+    })
+
+    it('should reject invalid wallet address', async () => {
+      const { ws } = await connectAndCapture()
+
+      ws.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: '' },
+      }))
+
+      const msg = await waitForMessage(ws)
+
+      expect(msg.event).toBe(WSEvent.ERROR)
+      expect(msg.payload.message).toBe('Invalid wallet address')
+      expect(wsServer.getConnectionCount()).toBe(0)
+
+      ws.close()
+    })
+
+    it('should reject null wallet address', async () => {
+      const { ws } = await connectAndCapture()
+
+      ws.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: null },
+      }))
+
+      const msg = await waitForMessage(ws)
+
+      expect(msg.event).toBe(WSEvent.ERROR)
+      expect(msg.payload.message).toBe('Invalid wallet address')
+
+      ws.close()
+    })
+
+    it('should prevent wallet address change (wallet-lock)', async () => {
+      const { ws } = await connectAndCapture()
+
+      // Identify with first wallet
+      ws.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      // Try to change wallet
+      ws.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet2' },
+      }))
+
+      const msg = await waitForMessage(ws)
+
+      expect(msg.event).toBe(WSEvent.ERROR)
+      expect(msg.payload.message).toBe('Wallet address cannot be changed for this connection')
+
+      ws.close()
+    })
+
+    it('should allow duplicate identify with same address (idempotent)', async () => {
+      const { ws } = await connectAndCapture()
+
+      ws.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      // Send identify again with same address - should not error
+      ws.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      expect(wsServer.getConnectionCount()).toBe(1)
+
+      ws.close()
+    })
+
+    it('should count multiple wallets as separate users', async () => {
+      const { ws: ws1 } = await connectAndCapture()
+      const { ws: ws2 } = await connectAndCapture()
+
+      ws1.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      ws2.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet2' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      expect(wsServer.getConnectionCount()).toBe(2)
+
+      ws1.close()
+      ws2.close()
+    })
+
+    it('should deduplicate same wallet across multiple connections', async () => {
+      const { ws: ws1 } = await connectAndCapture()
+      const { ws: ws2 } = await connectAndCapture()
+
+      ws1.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      ws2.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      // Same wallet = 1 unique user
+      expect(wsServer.getConnectionCount()).toBe(1)
+
+      ws1.close()
+      ws2.close()
+    })
+
+    it('should broadcast updated count to all clients', async () => {
+      const { ws: ws1, messages: messages1 } = await connectAndCapture()
+      const { ws: ws2, messages: messages2 } = await connectAndCapture()
+
+      // Clear initial connection:count messages
+      messages1.length = 0
+      messages2.length = 0
+
+      ws1.send(JSON.stringify({
+        event: WSEvent.IDENTIFY,
+        payload: { walletAddress: 'kaspatest:wallet1' },
+      }))
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      // Both clients should receive connection:count broadcast
+      const countMsg1 = messages1.find(m => m.event === WSEvent.CONNECTION_COUNT)
+      const countMsg2 = messages2.find(m => m.event === WSEvent.CONNECTION_COUNT)
+
+      expect(countMsg1).toBeDefined()
+      expect(countMsg1.payload.count).toBe(1)
+      expect(countMsg2).toBeDefined()
+      expect(countMsg2.payload.count).toBe(1)
+
+      ws1.close()
+      ws2.close()
+    })
+  })
+
   describe('JOIN_ROOM event', () => {
     beforeEach(() => {
       mockRooms.set('test-room-id', createMockRoom('test-room-id'))

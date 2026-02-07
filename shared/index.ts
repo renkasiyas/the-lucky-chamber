@@ -110,6 +110,7 @@ export interface Payout {
 
 export const WSEvent = {
   // Client -> Server
+  IDENTIFY: 'identify', // Client sends wallet address to count as online user
   JOIN_ROOM: 'join_room',
   LEAVE_ROOM: 'leave_room',
   JOIN_QUEUE: 'join_queue',
@@ -139,6 +140,10 @@ export const WSEvent = {
 export type WSEvent = (typeof WSEvent)[keyof typeof WSEvent]
 
 // WebSocket Message Payloads
+
+export interface IdentifyPayload {
+  walletAddress: string
+}
 
 export interface JoinRoomPayload {
   roomId: string

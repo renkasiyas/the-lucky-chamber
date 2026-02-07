@@ -245,6 +245,64 @@ describe('LobbyPage', () => {
       })
     })
 
+    it('subscribes to connection:count events', async () => {
+      render(<LobbyPage />)
+
+      await waitFor(() => {
+        expect(mockWsSubscribe).toHaveBeenCalledWith('connection:count', expect.any(Function))
+      })
+    })
+
+    it('plays player-joined sound when connection count increases', async () => {
+      let connectionCountHandler: ((payload: unknown) => void) | null = null
+
+      mockWsSubscribe.mockImplementation((event: string, handler: (payload: unknown) => void) => {
+        if (event === 'connection:count') {
+          connectionCountHandler = handler
+        }
+        return vi.fn()
+      })
+
+      render(<LobbyPage />)
+
+      await waitFor(() => {
+        expect(connectionCountHandler).not.toBeNull()
+      })
+
+      // First count (initial) — should NOT play sound
+      connectionCountHandler!({ count: 3 })
+      expect(mockPlay).not.toHaveBeenCalledWith('player-joined', expect.anything())
+
+      // Count increases — should play sound
+      connectionCountHandler!({ count: 4 })
+      expect(mockPlay).toHaveBeenCalledWith('player-joined', { volume: 0.5 })
+    })
+
+    it('does not play sound when connection count decreases', async () => {
+      let connectionCountHandler: ((payload: unknown) => void) | null = null
+
+      mockWsSubscribe.mockImplementation((event: string, handler: (payload: unknown) => void) => {
+        if (event === 'connection:count') {
+          connectionCountHandler = handler
+        }
+        return vi.fn()
+      })
+
+      render(<LobbyPage />)
+
+      await waitFor(() => {
+        expect(connectionCountHandler).not.toBeNull()
+      })
+
+      // Initial count
+      connectionCountHandler!({ count: 5 })
+      mockPlay.mockClear()
+
+      // Count decreases — no sound
+      connectionCountHandler!({ count: 4 })
+      expect(mockPlay).not.toHaveBeenCalledWith('player-joined', expect.anything())
+    })
+
     it('subscribes to error events', async () => {
       render(<LobbyPage />)
 

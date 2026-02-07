@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import type { IncomingMessage } from 'http'
 import {
   WSEvent,
+  type IdentifyPayload,
   type JoinRoomPayload,
   type LeaveRoomPayload,
   type JoinQueuePayload,
@@ -187,6 +188,10 @@ export class WSServer {
 
     try {
       switch (event) {
+        case WSEvent.IDENTIFY:
+          this.handleIdentify(ws, payload as IdentifyPayload)
+          break
+
         case WSEvent.JOIN_ROOM:
           this.handleJoinRoom(ws, payload as JoinRoomPayload)
           break
@@ -235,6 +240,26 @@ export class WSServer {
       })
       this.sendError(ws, err.message || 'Internal server error')
     }
+  }
+
+  private handleIdentify(ws: WebSocket, payload: IdentifyPayload): void {
+    const { walletAddress } = payload
+    const client = this.clients.get(ws)
+    if (!client) return
+
+    if (!walletAddress || typeof walletAddress !== 'string') {
+      this.sendError(ws, 'Invalid wallet address')
+      return
+    }
+
+    // Security: Once wallet is set, it cannot be changed for this connection
+    if (client.walletAddress && client.walletAddress !== walletAddress) {
+      this.sendError(ws, 'Wallet address cannot be changed for this connection')
+      return
+    }
+
+    client.walletAddress = walletAddress
+    this.broadcastConnectionCount()
   }
 
   private handleJoinRoom(ws: WebSocket, payload: JoinRoomPayload): void {

@@ -74,8 +74,8 @@ describe('useSound', () => {
   it('preloads all sound files on mount', () => {
     renderHook(() => useSound(), { wrapper })
 
-    // Should create Audio instances for all 9 sounds
-    expect(audioInstances.length).toBe(9)
+    // Should create Audio instances for all 10 sounds
+    expect(audioInstances.length).toBe(10)
 
     // Check that load() was called on each instance
     audioInstances.forEach(audio => {
