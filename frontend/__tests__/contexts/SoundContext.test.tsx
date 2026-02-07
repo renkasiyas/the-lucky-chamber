@@ -87,7 +87,7 @@ describe('SoundContext', () => {
       })
 
       // Should create Audio instances for all sounds
-      expect(audioInstances.length).toBe(9) // 9 sounds defined
+      expect(audioInstances.length).toBe(10) // 10 sounds defined
     })
 
     it('sets preload to auto', () => {
@@ -123,7 +123,7 @@ describe('SoundContext', () => {
         ),
       })
 
-      expect(loadSpy).toHaveBeenCalledTimes(9)
+      expect(loadSpy).toHaveBeenCalledTimes(10)
     })
   })
 

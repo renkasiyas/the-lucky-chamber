@@ -42,6 +42,13 @@ export function Header() {
   const { address, connected, connecting, connect, disconnect, balance, refreshBalance } = useKasware()
   const { domain } = useKNS(address)
   const toast = useToast()
+
+  // Identify with backend so this user counts in the online user tally
+  useEffect(() => {
+    if (ws.connected && address) {
+      ws.send('identify', { walletAddress: address })
+    }
+  }, [ws.connected, ws.send, address])
   const hasShownToast = useRef(false)
 
   // Show toast when connected with KNS domain

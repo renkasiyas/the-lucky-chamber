@@ -162,6 +162,64 @@ describe('Header', () => {
     })
   })
 
+  describe('Identify on Connect', () => {
+    it('sends identify event when connected with wallet address', () => {
+      const mockSend = vi.fn()
+
+      vi.spyOn(useWebSocketModule, 'useWebSocket').mockReturnValue({
+        connected: true,
+        send: mockSend,
+        subscribe: mockSubscribe,
+      })
+
+      vi.spyOn(useKaswareModule, 'useKasware').mockReturnValue({
+        ...defaultKaswareMock,
+        address: 'kaspa:qqtest1234567890abcdefghijklmnop',
+        connected: true,
+      })
+
+      render(<Header />)
+
+      expect(mockSend).toHaveBeenCalledWith('identify', {
+        walletAddress: 'kaspa:qqtest1234567890abcdefghijklmnop',
+      })
+    })
+
+    it('does not send identify when wallet is not connected', () => {
+      const mockSend = vi.fn()
+
+      vi.spyOn(useWebSocketModule, 'useWebSocket').mockReturnValue({
+        connected: true,
+        send: mockSend,
+        subscribe: mockSubscribe,
+      })
+
+      render(<Header />)
+
+      expect(mockSend).not.toHaveBeenCalledWith('identify', expect.anything())
+    })
+
+    it('does not send identify when WebSocket is not connected', () => {
+      const mockSend = vi.fn()
+
+      vi.spyOn(useWebSocketModule, 'useWebSocket').mockReturnValue({
+        connected: false,
+        send: mockSend,
+        subscribe: mockSubscribe,
+      })
+
+      vi.spyOn(useKaswareModule, 'useKasware').mockReturnValue({
+        ...defaultKaswareMock,
+        address: 'kaspa:qqtest1234567890abcdefghijklmnop',
+        connected: true,
+      })
+
+      render(<Header />)
+
+      expect(mockSend).not.toHaveBeenCalledWith('identify', expect.anything())
+    })
+  })
+
   describe('Disconnected State', () => {
     it('shows connect button when not connected', () => {
       render(<Header />)

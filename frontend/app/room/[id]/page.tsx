@@ -661,6 +661,39 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </CardContent>
         </Card>
 
+        {/* Invite Link Button */}
+        {(room.state === 'LOBBY' || room.state === 'FUNDING') && (
+          <div className="animate-slide-up" style={{ animationDelay: '0.12s', opacity: 0 }}>
+            <Button
+              variant="secondary"
+              size="md"
+              fullWidth
+              onClick={async () => {
+                const url = window.location.href
+                if (navigator.share) {
+                  try {
+                    await navigator.share({ url })
+                    return
+                  } catch {
+                    // User cancelled or share failed, fall through to clipboard
+                  }
+                }
+                try {
+                  await navigator.clipboard.writeText(url)
+                  toast.success('Invite link copied!')
+                } catch {
+                  toast.error('Failed to copy link')
+                }
+              }}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+              <span>COPY INVITE LINK</span>
+            </Button>
+          </div>
+        )}
+
         {/* Join Button */}
         {!isInRoom && (room.state === 'LOBBY' || room.state === 'FUNDING') && (
           <div className="animate-slide-up" style={{ animationDelay: '0.15s', opacity: 0 }}>

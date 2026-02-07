@@ -50,6 +50,7 @@ export default function LobbyPage() {
   const [queueCount, setQueueCount] = useState(0)
   const [inQueue, setInQueue] = useState(false)
   const [botStatus, setBotStatus] = useState<{ enabled: boolean; canEnable: boolean; botCount: number } | null>(null)
+  const prevOnlineCountRef = useRef<number | null>(null)
   const toast = useToast()
   const { play } = useSound()
   const activeRoomChecked = useRef(false)
@@ -141,6 +142,23 @@ export default function LobbyPage() {
       router.push('/')
     }
   }, [connected, initializing, router])
+
+  // Listen for connection count changes and play sound when someone joins
+  useEffect(() => {
+    if (!ws.connected) return
+
+    const unsubConnectionCount = ws.subscribe('connection:count', (payload: { count?: number }) => {
+      const count = payload.count || 0
+
+      // Play sound when count increases (skip the initial value)
+      if (prevOnlineCountRef.current !== null && count > prevOnlineCountRef.current) {
+        play('player-joined', { volume: 0.5 })
+      }
+      prevOnlineCountRef.current = count
+    })
+
+    return () => unsubConnectionCount()
+  }, [ws.connected, ws.subscribe, play])
 
   // Listen for queue updates and room assignments
   useEffect(() => {
