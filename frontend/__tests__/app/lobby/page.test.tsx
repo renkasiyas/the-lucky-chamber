@@ -114,6 +114,12 @@ describe('LobbyPage', () => {
             }),
         } as Response)
       }
+      if (typeof url === 'string' && url.includes('/api/users/') && url.includes('/active-room')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ room: null }),
+        } as Response)
+      }
       return Promise.reject(new Error('Not mocked'))
     })
   })

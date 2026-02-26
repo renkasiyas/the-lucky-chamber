@@ -152,7 +152,7 @@ describe('RoomPage', () => {
 
       // Wait for the useEffect to trigger the redirect
       await waitFor(() => {
-        expect(mockPush).toHaveBeenCalledWith('/')
+        expect(mockPush).toHaveBeenCalledWith('/?redirect=%2Froom%2Ftest-room-123')
       })
     })
 

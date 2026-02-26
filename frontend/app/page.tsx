@@ -14,7 +14,9 @@ export default function Home() {
 
   useEffect(() => {
     if (!initializing && connected) {
-      router.push('/lobby')
+      const params = new URLSearchParams(window.location.search)
+      const redirectTo = params.get('redirect')
+      router.push(redirectTo || '/lobby')
     }
   }, [connected, initializing, router])
 
