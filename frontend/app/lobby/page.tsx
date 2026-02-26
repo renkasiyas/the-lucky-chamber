@@ -487,10 +487,10 @@ export default function LobbyPage() {
                           REGULAR
                         </span>
                         <div className="flex gap-0.5">
-                          {Array.from({ length: customPlayerCount }, (_, i) => (
+                          {Array.from({ length: 6 }, (_, i) => (
                             <div
                               key={i}
-                              className={`w-1.5 h-1.5 rounded-full ${i === Math.floor(customPlayerCount / 2) ? 'bg-blood-light' : 'bg-edge-light'}`}
+                              className={`w-1.5 h-1.5 rounded-full ${i === 3 ? 'bg-blood-light' : 'bg-edge-light'}`}
                             />
                           ))}
                         </div>

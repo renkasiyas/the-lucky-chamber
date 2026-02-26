@@ -686,8 +686,8 @@ export class RoomManager {
     }
 
     // Pre-generate all chambers using provably-fair RNG
-    // REGULAR: one chamber per player, EXTREME: scales with players
-    const totalChambers = room.mode === GameMode.REGULAR ? room.seats.length : room.seats.length * 6
+    // REGULAR: always 6 chambers, 1 bullet regardless of player count
+    const totalChambers = room.mode === GameMode.REGULAR ? GameConfig.REGULAR.CHAMBERS : room.seats.length * 6
     const chambers = this.generateChambers(
       roomId,
       serverSeed,
