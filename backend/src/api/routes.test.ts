@@ -91,12 +91,12 @@ describe('API Routes', () => {
 
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: GameMode.REGULAR, seatPrice: 10 })
+        .send({ mode: GameMode.REGULAR, seatPrice: 25 })
 
       expect(res.status).toBe(200)
       expect(res.body.room).toBeDefined()
       expect(res.body.room.mode).toBe(GameMode.REGULAR)
-      expect(roomManager.createRoom).toHaveBeenCalledWith(GameMode.REGULAR, 10)
+      expect(roomManager.createRoom).toHaveBeenCalledWith(GameMode.REGULAR, 25, undefined)
     })
 
     it('should create an extreme mode room', async () => {
@@ -105,7 +105,7 @@ describe('API Routes', () => {
 
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: GameMode.EXTREME, seatPrice: 10 })
+        .send({ mode: GameMode.EXTREME, seatPrice: 25 })
 
       expect(res.status).toBe(200)
       expect(res.body.room.mode).toBe(GameMode.EXTREME)
@@ -160,7 +160,7 @@ describe('API Routes', () => {
 
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: GameMode.REGULAR, seatPrice: 10 })
+        .send({ mode: GameMode.REGULAR, seatPrice: 25 })
 
       expect(res.status).toBe(500)
       expect(res.body.error).toBe('Failed to create room')

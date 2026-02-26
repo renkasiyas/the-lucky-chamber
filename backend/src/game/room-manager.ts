@@ -204,7 +204,7 @@ export class RoomManager {
   /**
    * Create a new room
    */
-  createRoom(mode: GameMode, customSeatPrice?: number): Room {
+  createRoom(mode: GameMode, customSeatPrice?: number, playerCount?: number): Room {
     const roomId = crypto.randomUUID()
     const now = Date.now()
 
@@ -218,8 +218,9 @@ export class RoomManager {
         throw new Error('Regular mode requires custom seat price')
       }
       seatPrice = customSeatPrice
-      maxPlayers = GameConfig.REGULAR.MAX_PLAYERS
-      minPlayers = GameConfig.REGULAR.MIN_PLAYERS
+      const count = playerCount ?? GameConfig.REGULAR.MAX_PLAYERS
+      maxPlayers = count
+      minPlayers = count
       timeoutSeconds = GameConfig.REGULAR.TIMEOUT_SECONDS
     } else {
       seatPrice = GameConfig.EXTREME.SEAT_PRICE_KAS
@@ -685,8 +686,8 @@ export class RoomManager {
     }
 
     // Pre-generate all chambers using provably-fair RNG
-    // REGULAR: 6 chambers (one revolver), EXTREME: scales with players
-    const totalChambers = room.mode === GameMode.REGULAR ? 6 : room.seats.length * 6
+    // REGULAR: one chamber per player, EXTREME: scales with players
+    const totalChambers = room.mode === GameMode.REGULAR ? room.seats.length : room.seats.length * 6
     const chambers = this.generateChambers(
       roomId,
       serverSeed,

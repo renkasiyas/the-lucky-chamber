@@ -14,6 +14,7 @@ import { logger } from '../utils/logger.js'
 const createRoomSchema = z.object({
   mode: z.enum(['REGULAR', 'EXTREME']),
   seatPrice: z.number().positive(),
+  playerCount: z.number().int().optional(),
   creatorAddress: z.string().min(1).optional()
 })
 
@@ -32,10 +33,10 @@ router.post('/rooms', async (req: Request, res: Response) => {
       return res.status(400).json({ error: result.error.message })
     }
 
-    const { mode, seatPrice } = result.data
+    const { mode, seatPrice, playerCount } = result.data
 
     const gameConfig = getGameConfig()
-    const { minSeatPrice, maxSeatPrice } = gameConfig.customRoom
+    const { minSeatPrice, maxSeatPrice, minPlayers, maxPlayers } = gameConfig.customRoom
 
     if (seatPrice < minSeatPrice || seatPrice > maxSeatPrice) {
       return res.status(400).json({
@@ -43,7 +44,13 @@ router.post('/rooms', async (req: Request, res: Response) => {
       })
     }
 
-    const room = await roomManager.createRoom(mode, seatPrice)
+    if (playerCount !== undefined && (playerCount < minPlayers || playerCount > maxPlayers)) {
+      return res.status(400).json({
+        error: `Player count must be between ${minPlayers} and ${maxPlayers}`
+      })
+    }
+
+    const room = await roomManager.createRoom(mode, seatPrice, playerCount)
     res.json({ room })
   } catch (error: any) {
     logger.error('Failed to create room', { error: error?.message || String(error) })

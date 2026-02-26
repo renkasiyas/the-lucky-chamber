@@ -42,10 +42,11 @@ interface GameConfig {
 export default function LobbyPage() {
   const router = useRouter()
   const { connected, initializing, address } = useKasware()
-  const [activeTab, setActiveTab] = useState<LobbyTab>('quickmatch')
+  const [activeTab, setActiveTab] = useState<LobbyTab>('custom')
   const [loading, setLoading] = useState(false)
   const [customMode, setCustomMode] = useState<'REGULAR' | 'EXTREME'>('REGULAR')
-  const [customPrice, setCustomPrice] = useState<string>('10')
+  const [customPlayerCount, setCustomPlayerCount] = useState(6)
+  const [customPrice, setCustomPrice] = useState<string>('25')
   const [config, setConfig] = useState<GameConfig | null>(null)
   const [queueCount, setQueueCount] = useState(0)
   const [inQueue, setInQueue] = useState(false)
@@ -87,11 +88,11 @@ export default function LobbyPage() {
         if (response.ok) {
           const data = await response.json()
           setConfig(data)
-          // Default to quickmatch if enabled, otherwise custom
-          if (data.quickMatch.enabled) {
-            setActiveTab('quickmatch')
-          } else {
+          // Default to custom if enabled, otherwise quickmatch
+          if (data.customRoom.enabled) {
             setActiveTab('custom')
+          } else {
+            setActiveTab('quickmatch')
           }
         }
       } catch (err) {
@@ -200,8 +201,8 @@ export default function LobbyPage() {
     }
   }, [ws.connected, ws.subscribe, address, router, toast, inQueue])
 
-  const createRoom = async (mode: 'REGULAR' | 'EXTREME', seatPrice: number) => {
-    const minPrice = config?.customRoom.minSeatPrice || 10
+  const createRoom = async (mode: 'REGULAR' | 'EXTREME', seatPrice: number, playerCount: number) => {
+    const minPrice = config?.customRoom.minSeatPrice || 25
     if (seatPrice < minPrice) {
       toast.error(`Minimum seat price is ${minPrice} KAS`)
       return
@@ -212,7 +213,7 @@ export default function LobbyPage() {
       const response = await fetch(`${appConfig.api.baseUrl}/api/rooms`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, seatPrice }),
+        body: JSON.stringify({ mode, seatPrice, playerCount }),
       })
 
       if (!response.ok) {
@@ -255,7 +256,7 @@ export default function LobbyPage() {
 
   const handleCreateCustomRoom = () => {
     const price = parseFloat(customPrice)
-    const minPrice = config?.customRoom.minSeatPrice || 10
+    const minPrice = config?.customRoom.minSeatPrice || 25
     const maxPrice = config?.customRoom.maxSeatPrice || 10000
 
     if (isNaN(price) || price < 0) {
@@ -270,7 +271,7 @@ export default function LobbyPage() {
       toast.error(`Maximum seat price is ${formatKAS(maxPrice, 0)} KAS`)
       return
     }
-    createRoom(customMode, price)
+    createRoom(customMode, price, customPlayerCount)
   }
 
   if (initializing) {
@@ -288,8 +289,7 @@ export default function LobbyPage() {
     )
   }
 
-  const maxPlayers = config?.customRoom.maxPlayers || 6
-  const minPrice = config?.customRoom.minSeatPrice || 10
+  const minPrice = config?.customRoom.minSeatPrice || 25
   const maxPrice = config?.customRoom.maxSeatPrice || 10000
 
   return (
@@ -311,6 +311,16 @@ export default function LobbyPage() {
         {/* Tab Selector - compact on mobile */}
         <div className="flex gap-1 p-1 md:p-1.5 bg-noir border border-edge rounded-lg md:rounded-xl animate-slide-up" style={{ animationDelay: '0.1s', opacity: 0 }}>
           <button
+            onClick={() => { play('click'); setActiveTab('custom') }}
+            className={`flex-1 py-2 md:py-3 px-3 md:px-4 rounded-md md:rounded-lg font-display text-sm md:text-base tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
+              activeTab === 'custom'
+                ? 'bg-gradient-to-r from-gold to-gold-dark text-void shadow-gold'
+                : 'text-ash hover:text-chalk'
+            }`}
+          >
+            CREATE ROOM
+          </button>
+          <button
             onClick={() => { play('click'); config?.quickMatch.enabled && setActiveTab('quickmatch') }}
             disabled={!config?.quickMatch.enabled}
             className={`flex-1 py-2 md:py-3 px-3 md:px-4 rounded-md md:rounded-lg font-display text-sm md:text-base tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
@@ -322,16 +332,6 @@ export default function LobbyPage() {
             }`}
           >
             QUICK MATCH
-          </button>
-          <button
-            onClick={() => { play('click'); setActiveTab('custom') }}
-            className={`flex-1 py-2 md:py-3 px-3 md:px-4 rounded-md md:rounded-lg font-display text-sm md:text-base tracking-wide transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold ${
-              activeTab === 'custom'
-                ? 'bg-gradient-to-r from-gold to-gold-dark text-void shadow-gold'
-                : 'text-ash hover:text-chalk'
-            }`}
-          >
-            CREATE ROOM
           </button>
         </div>
 
@@ -487,15 +487,15 @@ export default function LobbyPage() {
                           REGULAR
                         </span>
                         <div className="flex gap-0.5">
-                          {[0, 1, 2, 3, 4, 5].map(i => (
+                          {Array.from({ length: customPlayerCount }, (_, i) => (
                             <div
                               key={i}
-                              className={`w-1.5 h-1.5 rounded-full ${i === 3 ? 'bg-blood-light' : 'bg-edge-light'}`}
+                              className={`w-1.5 h-1.5 rounded-full ${i === Math.floor(customPlayerCount / 2) ? 'bg-blood-light' : 'bg-edge-light'}`}
                             />
                           ))}
                         </div>
                       </div>
-                      <div className="text-xs text-ash font-mono mb-2">{maxPlayers} PLAYERS</div>
+                      <div className="text-xs text-ash font-mono mb-2">{customPlayerCount} PLAYERS</div>
                       <div className="text-sm text-ember">
                         {config?.modes.REGULAR.description || 'Classic chamber. One bullet, six souls. One falls, five split the pot.'}
                       </div>
@@ -532,6 +532,30 @@ export default function LobbyPage() {
                 </div>
               </div>
 
+              {/* Player Count */}
+              {customMode === 'REGULAR' && (
+                <div>
+                  <label className="block text-xs font-mono text-ember uppercase tracking-wider mb-3">
+                    Players
+                  </label>
+                  <div className="flex gap-2">
+                    {[2, 3, 4, 5, 6].map(n => (
+                      <button
+                        key={n}
+                        onClick={() => { play('click'); setCustomPlayerCount(n) }}
+                        className={`flex-1 py-3 rounded-xl border-2 font-display text-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold focus-visible:ring-offset-2 focus-visible:ring-offset-noir ${
+                          customPlayerCount === n
+                            ? 'border-gold bg-gold/10 text-gold'
+                            : 'border-edge bg-smoke/50 text-ash hover:border-edge-light'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Price Input */}
               <div>
                 <label className="block text-xs font-mono text-ember uppercase tracking-wider mb-3">
@@ -565,23 +589,31 @@ export default function LobbyPage() {
                   <span className="text-xs font-mono text-ember uppercase tracking-wider">Total Pot</span>
                   <div className="flex items-baseline gap-2">
                     <span className="font-display text-2xl text-gold">
-                      {formatKAS(parseFloat(customPrice) * maxPlayers || 0, 0)}
+                      {formatKAS(parseFloat(customPrice) * customPlayerCount || 0, 0)}
                     </span>
                     <span className="text-sm text-ash">KAS</span>
                   </div>
                 </div>
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs font-mono text-ember uppercase tracking-wider">Survivor Share</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-ember uppercase tracking-wider">Survivor Wins</span>
+                    {(() => {
+                      const price = parseFloat(customPrice) || 0
+                      const wins = calculatePayouts(price, customPlayerCount, config?.houseCutPercent ?? 5, customPlayerCount - 1).perSurvivor
+                      const profit = price > 0 ? Math.round((wins - price) / price * 100) : 0
+                      return <span className="text-xs font-mono text-alive-light">+{profit}%</span>
+                    })()}
+                  </div>
                   <div className="flex items-baseline gap-2">
                     <span className="font-display text-xl text-alive-light">
                       {formatKAS(calculatePayouts(
                         parseFloat(customPrice) || 0,
-                        maxPlayers,
+                        customPlayerCount,
                         config?.houseCutPercent ?? 5,
-                        maxPlayers - 1
+                        customPlayerCount - 1
                       ).perSurvivor, 1)}
                     </span>
-                    <span className="text-sm text-ash">KAS each</span>
+                    <span className="text-sm text-ash">KAS</span>
                   </div>
                 </div>
               </div>

@@ -8,8 +8,8 @@
     "timeoutSeconds": 60
   },
   "customRoom": {
-    "enabled": false,
-    "minSeatPrice": 1,
+    "enabled": true,
+    "minSeatPrice": 25,
     "maxSeatPrice": 1000,
     "minPlayers": 2,
     "maxPlayers": 6,

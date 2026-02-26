@@ -278,6 +278,7 @@ export interface QueueUpdatePayload {
 export interface CreateRoomRequest {
   mode: GameMode
   seatPrice?: number // Only for REGULAR
+  playerCount?: number // Custom rooms: 2-6 players
 }
 
 export interface CreateRoomResponse {

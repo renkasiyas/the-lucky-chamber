@@ -175,13 +175,16 @@ describe('LobbyPage', () => {
       })
     })
 
-    it('defaults to quickmatch tab when enabled', async () => {
+    it('defaults to custom tab when customRoom is enabled', async () => {
       render(<LobbyPage />)
 
       await waitFor(() => {
-        // QUICK MATCH should be the active tab (uses gradient classes)
+        // CREATE ROOM should be the active tab (uses gradient classes)
+        const createRoomButton = screen.getByText('CREATE ROOM')
+        expect(createRoomButton.closest('button')).toHaveClass('from-gold')
+        // QUICK MATCH should not be active
         const quickMatchButton = screen.getByText('QUICK MATCH')
-        expect(quickMatchButton.closest('button')).toHaveClass('from-gold')
+        expect(quickMatchButton.closest('button')).not.toHaveClass('from-gold')
       })
     })
 
