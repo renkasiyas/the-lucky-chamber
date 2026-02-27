@@ -16,7 +16,11 @@ export default function Home() {
     if (!initializing && connected) {
       const params = new URLSearchParams(window.location.search)
       const redirectTo = params.get('redirect')
-      router.push(redirectTo || '/lobby')
+      // Validate redirect is a relative path to prevent open redirect attacks
+      const safePath = redirectTo && redirectTo.startsWith('/') && !redirectTo.startsWith('//')
+        ? redirectTo
+        : '/lobby'
+      router.push(safePath)
     }
   }, [connected, initializing, router])
 

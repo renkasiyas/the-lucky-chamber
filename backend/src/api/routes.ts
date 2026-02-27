@@ -36,6 +36,11 @@ router.post('/rooms', async (req: Request, res: Response) => {
     const { mode, seatPrice, playerCount } = result.data
 
     const gameConfig = getGameConfig()
+
+    if (!gameConfig.customRoom.enabled) {
+      return res.status(403).json({ error: 'Custom rooms are not enabled' })
+    }
+
     const { minSeatPrice, maxSeatPrice, minPlayers, maxPlayers } = gameConfig.customRoom
 
     if (seatPrice < minSeatPrice || seatPrice > maxSeatPrice) {

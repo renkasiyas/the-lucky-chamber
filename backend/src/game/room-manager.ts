@@ -1053,9 +1053,9 @@ export class RoomManager {
 
     // Wait for frontend to confirm results are shown before sending payout
     // This prevents the wallet notification from spoiling the result
-    // Timeout must be long enough for all death animations to complete:
-    // - Each round takes ~8-9 seconds (spin + cock + suspense + reveal)
-    // - Worst case: 5 deaths = ~45 seconds of animation + buffer
+    // Timeout must be long enough for the death animation to complete:
+    // - REGULAR mode ends on first death (~8-9 seconds for spin + cock + suspense + reveal)
+    // - 60 seconds is a conservative buffer for slow connections
     const PAYOUT_WAIT_TIMEOUT = 60000 // 60 seconds max wait (matches frontend fallback)
     const pendingPayout: PendingPayoutState = {
       roomId,
