@@ -14,7 +14,13 @@ export default function Home() {
 
   useEffect(() => {
     if (!initializing && connected) {
-      router.push('/lobby')
+      const params = new URLSearchParams(window.location.search)
+      const redirectTo = params.get('redirect')
+      // Validate redirect is a relative path to prevent open redirect attacks
+      const safePath = redirectTo && redirectTo.startsWith('/') && !redirectTo.startsWith('//')
+        ? redirectTo
+        : '/lobby'
+      router.push(safePath)
     }
   }, [connected, initializing, router])
 

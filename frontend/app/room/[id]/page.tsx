@@ -113,7 +113,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
   useEffect(() => {
     if (!initializing && !connected) {
-      router.push('/')
+      router.push(`/?redirect=${encodeURIComponent('/room/' + roomId)}`)
       return
     }
 

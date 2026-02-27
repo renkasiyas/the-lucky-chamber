@@ -7,9 +7,26 @@ import request from 'supertest'
 import { router } from './routes.js'
 import { roomManager } from '../game/room-manager.js'
 import { store } from '../db/store.js'
+import { getGameConfig } from '../config/game-config.js'
 import { GameMode, RoomState, type Room } from '../../../shared/index.js'
 
 // Mock dependencies
+vi.mock('../config/game-config.js', () => ({
+  getGameConfig: vi.fn(() => ({
+    customRoom: {
+      enabled: true,
+      minSeatPrice: 25,
+      maxSeatPrice: 1000,
+      minPlayers: 2,
+      maxPlayers: 6,
+      timeoutSeconds: 180,
+    },
+    quickMatch: { enabled: true, minPlayers: 6, maxPlayers: 6, seatPrice: 25, timeoutSeconds: 180 },
+    modes: { REGULAR: { enabled: true }, EXTREME: { enabled: false } },
+    houseCutPercent: 5,
+  })),
+}))
+
 vi.mock('../game/room-manager.js', () => ({
   roomManager: {
     createRoom: vi.fn(),
@@ -91,12 +108,12 @@ describe('API Routes', () => {
 
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: GameMode.REGULAR, seatPrice: 10 })
+        .send({ mode: GameMode.REGULAR, seatPrice: 25 })
 
       expect(res.status).toBe(200)
       expect(res.body.room).toBeDefined()
       expect(res.body.room.mode).toBe(GameMode.REGULAR)
-      expect(roomManager.createRoom).toHaveBeenCalledWith(GameMode.REGULAR, 10)
+      expect(roomManager.createRoom).toHaveBeenCalledWith(GameMode.REGULAR, 25, undefined)
     })
 
     it('should create an extreme mode room', async () => {
@@ -105,7 +122,7 @@ describe('API Routes', () => {
 
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: GameMode.EXTREME, seatPrice: 10 })
+        .send({ mode: GameMode.EXTREME, seatPrice: 25 })
 
       expect(res.status).toBe(200)
       expect(res.body.room.mode).toBe(GameMode.EXTREME)
@@ -155,12 +172,49 @@ describe('API Routes', () => {
       expect(res.body.error).toContain('Seat price must be between')
     })
 
+    it('should return 403 when customRoom.enabled is false', async () => {
+      vi.mocked(getGameConfig).mockReturnValueOnce({
+        customRoom: { enabled: false, minSeatPrice: 25, maxSeatPrice: 1000, minPlayers: 2, maxPlayers: 6, timeoutSeconds: 180 },
+        quickMatch: { enabled: true, minPlayers: 6, maxPlayers: 6, seatPrice: 25, timeoutSeconds: 180 },
+        modes: { REGULAR: { enabled: true }, EXTREME: { enabled: false } },
+        houseCutPercent: 5,
+      } as any)
+
+      const res = await request(app)
+        .post('/api/rooms')
+        .send({ mode: GameMode.REGULAR, seatPrice: 25 })
+
+      expect(res.status).toBe(403)
+      expect(res.body.error).toBe('Custom rooms are not enabled')
+    })
+
+    it('should forward playerCount to room creation', async () => {
+      const mockRoom = createMockRoom({ minPlayers: 4, maxPlayers: 4 })
+      vi.mocked(roomManager.createRoom).mockReturnValue(mockRoom)
+
+      const res = await request(app)
+        .post('/api/rooms')
+        .send({ mode: GameMode.REGULAR, seatPrice: 25, playerCount: 4 })
+
+      expect(res.status).toBe(200)
+      expect(roomManager.createRoom).toHaveBeenCalledWith(GameMode.REGULAR, 25, 4)
+    })
+
+    it('should return 400 for playerCount out of range', async () => {
+      const res = await request(app)
+        .post('/api/rooms')
+        .send({ mode: GameMode.REGULAR, seatPrice: 25, playerCount: 1 })
+
+      expect(res.status).toBe(400)
+      expect(res.body.error).toContain('Player count must be between')
+    })
+
     it('should return 500 on room creation error', async () => {
       vi.mocked(roomManager.createRoom).mockRejectedValue(new Error('Creation failed'))
 
       const res = await request(app)
         .post('/api/rooms')
-        .send({ mode: GameMode.REGULAR, seatPrice: 10 })
+        .send({ mode: GameMode.REGULAR, seatPrice: 25 })
 
       expect(res.status).toBe(500)
       expect(res.body.error).toBe('Failed to create room')

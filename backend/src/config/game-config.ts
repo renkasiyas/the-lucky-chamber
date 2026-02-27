@@ -45,7 +45,7 @@ export function getGameConfig(): GameConfigType {
     return {
       houseCutPercent: 5,
       quickMatch: { enabled: true, seatPrice: 10, minPlayers: 6, maxPlayers: 6, timeoutSeconds: 60 },
-      customRoom: { enabled: true, minSeatPrice: 1, maxSeatPrice: 1000, minPlayers: 2, maxPlayers: 6, timeoutSeconds: 60 },
+      customRoom: { enabled: true, minSeatPrice: 25, maxSeatPrice: 1000, minPlayers: 2, maxPlayers: 6, timeoutSeconds: 60 },
       modes: {
         REGULAR: { enabled: true, description: 'Classic 6-player Russian Roulette' },
         EXTREME: { enabled: false, description: 'High-stakes mode (coming soon)' }

@@ -204,7 +204,7 @@ export class RoomManager {
   /**
    * Create a new room
    */
-  createRoom(mode: GameMode, customSeatPrice?: number): Room {
+  createRoom(mode: GameMode, customSeatPrice?: number, playerCount?: number): Room {
     const roomId = crypto.randomUUID()
     const now = Date.now()
 
@@ -218,8 +218,9 @@ export class RoomManager {
         throw new Error('Regular mode requires custom seat price')
       }
       seatPrice = customSeatPrice
-      maxPlayers = GameConfig.REGULAR.MAX_PLAYERS
-      minPlayers = GameConfig.REGULAR.MIN_PLAYERS
+      const count = playerCount ?? GameConfig.REGULAR.MAX_PLAYERS
+      maxPlayers = count
+      minPlayers = count
       timeoutSeconds = GameConfig.REGULAR.TIMEOUT_SECONDS
     } else {
       seatPrice = GameConfig.EXTREME.SEAT_PRICE_KAS
@@ -685,8 +686,8 @@ export class RoomManager {
     }
 
     // Pre-generate all chambers using provably-fair RNG
-    // REGULAR: 6 chambers (one revolver), EXTREME: scales with players
-    const totalChambers = room.mode === GameMode.REGULAR ? 6 : room.seats.length * 6
+    // REGULAR: always 6 chambers, 1 bullet regardless of player count
+    const totalChambers = room.mode === GameMode.REGULAR ? GameConfig.REGULAR.CHAMBERS : room.seats.length * 6
     const chambers = this.generateChambers(
       roomId,
       serverSeed,
@@ -1052,9 +1053,9 @@ export class RoomManager {
 
     // Wait for frontend to confirm results are shown before sending payout
     // This prevents the wallet notification from spoiling the result
-    // Timeout must be long enough for all death animations to complete:
-    // - Each round takes ~8-9 seconds (spin + cock + suspense + reveal)
-    // - Worst case: 5 deaths = ~45 seconds of animation + buffer
+    // Timeout must be long enough for the death animation to complete:
+    // - REGULAR mode ends on first death (~8-9 seconds for spin + cock + suspense + reveal)
+    // - 60 seconds is a conservative buffer for slow connections
     const PAYOUT_WAIT_TIMEOUT = 60000 // 60 seconds max wait (matches frontend fallback)
     const pendingPayout: PendingPayoutState = {
       roomId,

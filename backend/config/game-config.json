@@ -5,15 +5,15 @@
     "seatPrice": 25,
     "minPlayers": 6,
     "maxPlayers": 6,
-    "timeoutSeconds": 60
+    "timeoutSeconds": 180
   },
   "customRoom": {
-    "enabled": false,
-    "minSeatPrice": 1,
+    "enabled": true,
+    "minSeatPrice": 25,
     "maxSeatPrice": 1000,
     "minPlayers": 2,
     "maxPlayers": 6,
-    "timeoutSeconds": 60
+    "timeoutSeconds": 180
   },
   "modes": {
     "REGULAR": {

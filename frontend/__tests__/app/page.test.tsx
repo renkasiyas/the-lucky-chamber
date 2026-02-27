@@ -302,6 +302,63 @@ describe('Home (Landing Page)', () => {
     })
   })
 
+  describe('Redirect Security', () => {
+    const connectedState = {
+      connected: true,
+      initializing: false,
+      address: 'kaspa:qqtest1234567890',
+      connecting: false,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      balance: { total: '100000000', confirmed: '100000000', unconfirmed: '0' },
+      refreshBalance: vi.fn(),
+      error: null,
+      network: 'mainnet',
+    }
+
+    it('redirects to safe path when ?redirect param is a valid relative path', async () => {
+      const originalLocation = window.location
+      window.location = { ...originalLocation, search: '?redirect=%2Froom%2Fabc123' } as any
+
+      mockUseKasware.mockReturnValue(connectedState)
+      render(<Home />)
+
+      await waitFor(() => {
+        expect(mockPush).toHaveBeenCalledWith('/room/abc123')
+      })
+
+      window.location = originalLocation as any
+    })
+
+    it('blocks open redirect to external URL', async () => {
+      const originalLocation = window.location
+      window.location = { ...originalLocation, search: '?redirect=https%3A%2F%2Fevil.com' } as any
+
+      mockUseKasware.mockReturnValue(connectedState)
+      render(<Home />)
+
+      await waitFor(() => {
+        expect(mockPush).toHaveBeenCalledWith('/lobby')
+      })
+
+      window.location = originalLocation as any
+    })
+
+    it('blocks protocol-relative redirect (//) as open redirect', async () => {
+      const originalLocation = window.location
+      window.location = { ...originalLocation, search: '?redirect=%2F%2Fevil.com' } as any
+
+      mockUseKasware.mockReturnValue(connectedState)
+      render(<Home />)
+
+      await waitFor(() => {
+        expect(mockPush).toHaveBeenCalledWith('/lobby')
+      })
+
+      window.location = originalLocation as any
+    })
+  })
+
   describe('Edge Cases', () => {
     it('handles connected state on first render', () => {
       mockUseKasware.mockReturnValue({

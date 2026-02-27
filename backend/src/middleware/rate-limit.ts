@@ -4,6 +4,9 @@
 import rateLimit from 'express-rate-limit'
 import { logger } from '../utils/logger.js'
 
+const isLoopback = (ip: string | undefined) =>
+  ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1'
+
 // API rate limiter - 100 requests per minute per IP
 export const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -11,6 +14,7 @@ export const apiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => process.env.NODE_ENV !== 'production' && isLoopback(req.ip),
   handler: (req, res, _next, options) => {
     logger.warn('Rate limit exceeded', {
       ip: req.ip,
@@ -27,6 +31,8 @@ const WS_RATE_LIMIT = process.env.NODE_ENV === 'production' ? 20 : 60 // connect
 const WS_WINDOW_MS = 60 * 1000
 
 export function checkWsRateLimit(ip: string): boolean {
+  if (process.env.NODE_ENV !== 'production' && isLoopback(ip)) return true
+
   const now = Date.now()
   const record = wsConnectionCounts.get(ip)
 
