@@ -21,6 +21,8 @@ vi.mock('../db/store.js', () => ({
     addRound: vi.fn(),
     addPayout: vi.fn(),
     getPayouts: vi.fn().mockReturnValue([]),
+    getRefunds: vi.fn().mockReturnValue([]),
+    createRefund: vi.fn(),
     addSeat: vi.fn(),
     deleteSeat: vi.fn(),
     reindexSeats: vi.fn(),
@@ -65,6 +67,13 @@ vi.mock('../config.js', () => ({
   },
 }))
 
+const mockSendRefunds = vi.fn().mockResolvedValue([])
+vi.mock('../crypto/services/payout-service.js', () => ({
+  payoutService: {
+    sendRefunds: (...args: any[]) => mockSendRefunds(...args),
+  },
+}))
+
 describe('RoomManager', () => {
   let roomManager: RoomManager
   let mockWsServer: any
@@ -91,6 +100,7 @@ describe('RoomManager', () => {
     depositTxId: null,
     amount: 0,
     confirmed: false,
+    confirmedAt: null,
     clientSeed: null,
     alive: true,
     knsName: null,
@@ -525,6 +535,94 @@ describe('RoomManager', () => {
       await roomManager.recoverStaleRooms()
 
       expect(settledRoom.state).toBe(RoomState.SETTLED)
+    })
+  })
+
+  describe('recoverFailedRefunds', () => {
+    it('should skip non-ABORTED rooms', async () => {
+      vi.mocked(store.getAllRooms).mockReturnValue([
+        createMockRoom({ id: 'lobby-1', state: RoomState.LOBBY }),
+        createMockRoom({ id: 'playing-1', state: RoomState.PLAYING }),
+      ])
+
+      await roomManager.recoverFailedRefunds()
+
+      expect(mockSendRefunds).not.toHaveBeenCalled()
+    })
+
+    it('should skip ABORTED rooms with no confirmed seats', async () => {
+      vi.mocked(store.getAllRooms).mockReturnValue([
+        createMockRoom({
+          id: 'aborted-1',
+          state: RoomState.ABORTED,
+          seats: [createMockSeat(0, 'kaspatest:player1', { confirmed: false })],
+        }),
+      ])
+
+      await roomManager.recoverFailedRefunds()
+
+      expect(mockSendRefunds).not.toHaveBeenCalled()
+    })
+
+    it('should skip ABORTED rooms that already have refund records', async () => {
+      vi.mocked(store.getAllRooms).mockReturnValue([
+        createMockRoom({
+          id: 'aborted-2',
+          state: RoomState.ABORTED,
+          seats: [createMockSeat(0, 'kaspatest:player1', { confirmed: true })],
+        }),
+      ])
+      vi.mocked(store.getRefunds).mockReturnValue([
+        { roomId: 'aborted-2', seatIndex: 0, depositAddress: 'kaspatest:seat0deposit', walletAddress: 'kaspatest:player1', depositTxId: 'tx1', refundTxId: 'refund1', amount: 25, createdAt: Date.now() },
+      ])
+
+      await roomManager.recoverFailedRefunds()
+
+      expect(mockSendRefunds).not.toHaveBeenCalled()
+
+      // Reset mock
+      vi.mocked(store.getRefunds).mockReturnValue([])
+    })
+
+    it('should retry refund for ABORTED room with confirmed deposits but no refund records', async () => {
+      const room = createMockRoom({
+        id: 'failed-refund-1',
+        state: RoomState.ABORTED,
+        seats: [createMockSeat(0, 'kaspatest:player1', { confirmed: true })],
+      })
+      vi.mocked(store.getAllRooms).mockReturnValue([room])
+      vi.mocked(store.getRoom).mockReturnValue(room)
+      vi.mocked(store.getRefunds).mockReturnValue([])
+      mockSendRefunds.mockResolvedValueOnce(['refund-tx-abc'])
+
+      await roomManager.recoverFailedRefunds()
+
+      expect(mockSendRefunds).toHaveBeenCalledWith('failed-refund-1')
+      expect(store.updateRoom).toHaveBeenCalledWith('failed-refund-1', { refundTxIds: ['refund-tx-abc'] })
+    })
+
+    it('should continue processing other rooms when one refund fails', async () => {
+      const room1 = createMockRoom({
+        id: 'fail-1',
+        state: RoomState.ABORTED,
+        seats: [createMockSeat(0, 'kaspatest:player1', { confirmed: true })],
+      })
+      const room2 = createMockRoom({
+        id: 'fail-2',
+        state: RoomState.ABORTED,
+        seats: [createMockSeat(0, 'kaspatest:player2', { confirmed: true })],
+      })
+      vi.mocked(store.getAllRooms).mockReturnValue([room1, room2])
+      vi.mocked(store.getRoom).mockImplementation((id) => [room1, room2].find(r => r.id === id))
+      vi.mocked(store.getRefunds).mockReturnValue([])
+      mockSendRefunds
+        .mockRejectedValueOnce(new Error('RPC not connected'))
+        .mockResolvedValueOnce(['refund-tx-def'])
+
+      await roomManager.recoverFailedRefunds()
+
+      expect(mockSendRefunds).toHaveBeenCalledTimes(2)
+      expect(store.updateRoom).toHaveBeenCalledWith('fail-2', { refundTxIds: ['refund-tx-def'] })
     })
   })
 

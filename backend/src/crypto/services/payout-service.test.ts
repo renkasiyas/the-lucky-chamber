@@ -24,6 +24,7 @@ vi.mock('../kaspa-client.js', () => ({
     getUtxosByAddress: vi.fn(),
     submitTransaction: vi.fn(),
     isConnected: vi.fn().mockReturnValue(true),
+    waitForConnection: vi.fn().mockResolvedValue(undefined),
   },
 }))
 
@@ -287,8 +288,10 @@ describe('PayoutService', () => {
 
       await expect(payoutService.sendPayout('room-123')).rejects.toThrow('RPC connection timeout')
 
-      // Should have retried 3 times (3 attempts total)
+      // Should have been called 3 times total (1 initial + 2 retries)
       expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(3)
+      // waitForConnection called on attempt 2 only (skipped on 1st and last attempt)
+      expect(kaspaClient.waitForConnection).toHaveBeenCalledTimes(1)
     }, 15000)
 
     it('should not retry sendPayout on business logic error', async () => {
@@ -312,6 +315,8 @@ describe('PayoutService', () => {
 
       // Only called once per seat (1 attempt, no retries)
       expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(1)
+      // waitForConnection never called on first attempt
+      expect(kaspaClient.waitForConnection).not.toHaveBeenCalled()
     })
 
     it('should retry sendRefunds on connection error and eventually throw', async () => {
@@ -326,9 +331,11 @@ describe('PayoutService', () => {
 
       await expect(payoutService.sendRefunds('room-123')).rejects.toThrow('ECONNRESET')
 
-      // Should have retried 3 times
-      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(3)
-    }, 15000)
+      // Should have been called 5 times total (1 initial + 4 retries)
+      expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(5)
+      // waitForConnection called on attempts 2-4 (skipped on 1st and last attempt)
+      expect(kaspaClient.waitForConnection).toHaveBeenCalledTimes(3)
+    }, 120000)
 
     it('should not retry sendRefunds on business logic error', async () => {
       vi.mocked(store.getRoom).mockReturnValue({

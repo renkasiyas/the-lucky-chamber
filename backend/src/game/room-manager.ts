@@ -63,6 +63,7 @@ export class RoomManager {
   private pendingGames: Map<string, PendingGameState> = new Map() // roomId -> pending state
   private pendingPayouts: Map<string, PendingPayoutState> = new Map() // roomId -> pending payout state
   private depositLocks: Set<string> = new Set() // roomId:seatIndex -> prevents concurrent confirmDeposit
+  private refundInProgress: Set<string> = new Set() // roomId -> prevents concurrent refund attempts
 
   /**
    * Set callback for when a room is completed (settled or aborted)
@@ -1151,6 +1152,7 @@ export class RoomManager {
     logRoomEvent('Room aborted, processing refunds', roomId)
 
     // Send refund transactions to all confirmed deposits
+    this.refundInProgress.add(roomId)
     try {
       const { payoutService } = await import('../crypto/services/payout-service.js')
       const refundTxIds = await payoutService.sendRefunds(roomId)
@@ -1173,6 +1175,8 @@ export class RoomManager {
         error: error?.message || String(error),
         stack: error?.stack
       })
+    } finally {
+      this.refundInProgress.delete(roomId)
     }
 
     // Notify callback that room is completed
@@ -1286,6 +1290,62 @@ export class RoomManager {
       logger.info(`Recovered ${recoveredCount} stale room(s), refunded ${refundedCount}`)
     } else {
       logger.info('No stale rooms to recover')
+    }
+  }
+
+  /**
+   * Retry refunds for ABORTED rooms where refund was attempted but failed.
+   * Identifies rooms with confirmed deposits but no refund records in the database.
+   * Called on startup (after recoverStaleRooms) and periodically via checkExpiredRooms.
+   */
+  async recoverFailedRefunds(): Promise<void> {
+    const rooms = store.getAllRooms()
+    let recoveredCount = 0
+
+    for (const room of rooms) {
+      if (room.state !== RoomState.ABORTED) continue
+      if (this.refundInProgress.has(room.id)) continue
+
+      const confirmedSeats = room.seats.filter(s => s.confirmed && s.walletAddress)
+      if (confirmedSeats.length === 0) continue
+
+      // Check if refunds were already successfully recorded for all confirmed seats
+      const existingRefunds = store.getRefunds(room.id)
+      if (existingRefunds.length >= confirmedSeats.length) continue
+
+      // This room has confirmed deposits but incomplete refund records — retry
+      logger.warn('Retrying failed refund for aborted room', {
+        roomId: room.id,
+        confirmedSeats: confirmedSeats.length,
+        existingRefunds: existingRefunds.length
+      })
+
+      this.refundInProgress.add(room.id)
+      try {
+        const { payoutService } = await import('../crypto/services/payout-service.js')
+        const refundTxIds = await payoutService.sendRefunds(room.id)
+
+        room.refundTxIds = refundTxIds
+        store.updateRoom(room.id, { refundTxIds })
+
+        if (refundTxIds.length > 0) {
+          logRoomEvent('Failed refund recovered successfully', room.id, { txIds: refundTxIds })
+          recoveredCount++
+        } else {
+          logger.info('Refund recovery found no UTXOs to refund', { roomId: room.id })
+        }
+      } catch (error: any) {
+        logger.error('Refund recovery attempt failed', {
+          roomId: room.id,
+          error: error?.message || String(error)
+        })
+      } finally {
+        this.refundInProgress.delete(room.id)
+      }
+    }
+
+    if (recoveredCount > 0) {
+      logger.info(`Recovered ${recoveredCount} previously failed refund(s)`)
     }
   }
 }
