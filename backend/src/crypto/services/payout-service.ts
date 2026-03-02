@@ -28,8 +28,11 @@ function isConnectionError(error: any): boolean {
     msg.includes('rpc connection timeout')
 }
 
-const RETRY_ATTEMPTS = 3
-const RETRY_DELAY_MS = 2000
+const PAYOUT_RETRY_ATTEMPTS = 3
+const PAYOUT_RETRY_DELAY_MS = 2000
+const REFUND_RETRY_ATTEMPTS = 5
+const REFUND_INITIAL_DELAY_MS = 2000
+const RECONNECT_TIMEOUT_MS = 15000
 
 export class PayoutService {
   /**
@@ -46,8 +49,15 @@ export class PayoutService {
     logger.info('Building payout transaction', { roomId, payoutCount: payouts.length })
 
     // Retry loop protects against brief RPC disconnection during the critical payout window
-    for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= PAYOUT_RETRY_ATTEMPTS; attempt++) {
       try {
+        // Wait for RPC connection on retries (auto-reconnect may be in progress)
+        // Skip on last attempt — the previous backoff already waited, and waitForConnection
+        // throwing here would mask the original connection error
+        if (attempt > 1 && attempt < PAYOUT_RETRY_ATTEMPTS) {
+          await kaspaClient.waitForConnection(RECONNECT_TIMEOUT_MS)
+        }
+
         // Gather UTXOs from ALL seat deposit addresses (deposits go to per-seat addresses)
         const allEntries: any[] = []
         const allPrivateKeys: any[] = []
@@ -140,11 +150,11 @@ export class PayoutService {
 
         return txId
       } catch (error: any) {
-        if (isConnectionError(error) && attempt < RETRY_ATTEMPTS) {
+        if (isConnectionError(error) && attempt < PAYOUT_RETRY_ATTEMPTS) {
           logger.warn('Payout attempt failed due to connection error, retrying', {
-            roomId, attempt, maxAttempts: RETRY_ATTEMPTS, error: error?.message
+            roomId, attempt, maxAttempts: PAYOUT_RETRY_ATTEMPTS, error: error?.message
           })
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+          await new Promise(resolve => setTimeout(resolve, PAYOUT_RETRY_DELAY_MS))
           continue
         }
         throw error
@@ -164,9 +174,16 @@ export class PayoutService {
 
     logger.info('Processing refunds for aborted room', { roomId, totalSeats: room.seats.length })
 
-    // Retry loop protects against brief RPC disconnection during the critical refund window
-    for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    // Retry loop with exponential backoff — refunds are critical, give reconnection time
+    for (let attempt = 1; attempt <= REFUND_RETRY_ATTEMPTS; attempt++) {
       try {
+        // Wait for RPC connection on retries (auto-reconnect may be in progress)
+        // Skip on last attempt — the previous backoff already waited, and waitForConnection
+        // throwing here would mask the original connection error
+        if (attempt > 1 && attempt < REFUND_RETRY_ATTEMPTS) {
+          await kaspaClient.waitForConnection(RECONNECT_TIMEOUT_MS)
+        }
+
         // Gather UTXOs from ALL seat deposit addresses (deposits go to per-seat addresses)
         const allEntries: any[] = []
         const allPrivateKeys: any[] = []
@@ -323,11 +340,12 @@ export class PayoutService {
 
         return [txId]
       } catch (error: any) {
-        if (isConnectionError(error) && attempt < RETRY_ATTEMPTS) {
-          logger.warn('Refund attempt failed due to connection error, retrying', {
-            roomId, attempt, maxAttempts: RETRY_ATTEMPTS, error: error?.message
+        if (isConnectionError(error) && attempt < REFUND_RETRY_ATTEMPTS) {
+          const backoffMs = REFUND_INITIAL_DELAY_MS * Math.pow(2, attempt - 1)
+          logger.warn('Refund attempt failed due to connection error, retrying with backoff', {
+            roomId, attempt, maxAttempts: REFUND_RETRY_ATTEMPTS, backoffMs, error: error?.message
           })
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+          await new Promise(resolve => setTimeout(resolve, backoffMs))
           continue
         }
         throw error

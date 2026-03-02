@@ -127,18 +127,26 @@ async function main() {
   // Recovery: Check for stale rooms from previous session and refund deposits
   logger.info('Running startup recovery check...')
   await roomManager.recoverStaleRooms()
+  await roomManager.recoverFailedRefunds()
 
   // Background tasks
   const CLEANUP_INTERVAL = 30000
+  const REFUND_RECOVERY_INTERVAL = 5 * 60 * 1000 // 5 minutes
   const cleanupInterval = setInterval(() => {
     roomManager.checkExpiredRooms()
     queueManager.clearExpiredEntries()
   }, CLEANUP_INTERVAL)
+  const refundRecoveryInterval = setInterval(() => {
+    roomManager.recoverFailedRefunds().catch(err => {
+      logger.error('Refund recovery interval failed', { error: err?.message || String(err) })
+    })
+  }, REFUND_RECOVERY_INTERVAL)
 
   // Graceful shutdown
   process.on('SIGTERM', () => {
     logger.info('SIGTERM received, shutting down gracefully')
     clearInterval(cleanupInterval)
+    clearInterval(refundRecoveryInterval)
     depositMonitor.stop()
     httpServer.close(() => {
       logger.info('Server closed')
