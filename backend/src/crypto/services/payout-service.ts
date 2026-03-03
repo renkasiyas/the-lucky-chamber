@@ -51,10 +51,10 @@ export class PayoutService {
     // Retry loop protects against brief RPC disconnection during the critical payout window
     for (let attempt = 1; attempt <= PAYOUT_RETRY_ATTEMPTS; attempt++) {
       try {
-        // Wait for RPC connection on retries (auto-reconnect may be in progress)
+        // Ensure RPC is connected before attempting (reconnects if dead)
         // Skip on last attempt — the previous backoff already waited, and waitForConnection
         // throwing here would mask the original connection error
-        if (attempt > 1 && attempt < PAYOUT_RETRY_ATTEMPTS) {
+        if (attempt < PAYOUT_RETRY_ATTEMPTS) {
           await kaspaClient.waitForConnection(RECONNECT_TIMEOUT_MS)
         }
 
@@ -177,10 +177,10 @@ export class PayoutService {
     // Retry loop with exponential backoff — refunds are critical, give reconnection time
     for (let attempt = 1; attempt <= REFUND_RETRY_ATTEMPTS; attempt++) {
       try {
-        // Wait for RPC connection on retries (auto-reconnect may be in progress)
+        // Ensure RPC is connected before attempting (reconnects if dead)
         // Skip on last attempt — the previous backoff already waited, and waitForConnection
         // throwing here would mask the original connection error
-        if (attempt > 1 && attempt < REFUND_RETRY_ATTEMPTS) {
+        if (attempt < REFUND_RETRY_ATTEMPTS) {
           await kaspaClient.waitForConnection(RECONNECT_TIMEOUT_MS)
         }
 

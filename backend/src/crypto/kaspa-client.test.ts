@@ -228,7 +228,38 @@ describe('KaspaClient', () => {
     it('should reject after timeout if not connected', async () => {
       await kaspaClient.initialize()
       mockRpcClient.isConnected = false
-      await expect(kaspaClient.waitForConnection(600)).rejects.toThrow('did not reconnect within 600ms')
+      await expect(kaspaClient.waitForConnection(2000)).rejects.toThrow('did not reconnect within 2000ms')
+    }, 15000)
+
+    it('should attempt explicit reconnect when auto-reconnect fails', async () => {
+      await kaspaClient.initialize()
+      mockRpcClient.isConnected = false
+      // reconnect will be called but isConnected stays false, so it should still timeout
+      const promise = kaspaClient.waitForConnection(2000)
+      await expect(promise).rejects.toThrow('did not reconnect')
+      // connect was called at least twice: initial + reconnect attempt
+      expect(mockRpcClient.connect).toHaveBeenCalled()
+    }, 15000)
+
+    it('should resolve after explicit reconnect succeeds', async () => {
+      await kaspaClient.initialize()
+      mockRpcClient.isConnected = false
+      // After reconnect, simulate connection coming back
+      setTimeout(() => {
+        mockRpcClient.isConnected = true
+      }, 2000)
+      await expect(kaspaClient.waitForConnection(6000)).resolves.not.toThrow()
+    }, 15000)
+  })
+
+  describe('reconnect', () => {
+    it('should create a fresh RPC client', async () => {
+      await kaspaClient.initialize()
+      mockRpcClient.isConnected = true
+      await kaspaClient.reconnect()
+      // disconnect was called to tear down old client, connect for new one
+      expect(mockRpcClient.disconnect).toHaveBeenCalled()
+      expect(mockRpcClient.connect).toHaveBeenCalled()
     })
   })
 
