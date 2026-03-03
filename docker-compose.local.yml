@@ -20,6 +20,7 @@ services:
       - BOTS_ENABLED=${BOTS_ENABLED:-false}
       - MIN_CONFIRMATIONS=${MIN_CONFIRMATIONS:-1}
       - SETTLEMENT_BLOCK_OFFSET=${SETTLEMENT_BLOCK_OFFSET:-5}
+      - DB_PATH=/app/data/game.db
     volumes:
       - backend_data:/app/data
     restart: unless-stopped
