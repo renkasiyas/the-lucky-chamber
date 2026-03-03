@@ -33,6 +33,7 @@ class KaspaClient {
   private initialized: boolean = false
   private networkId: string
   private disconnectedLogged: boolean = false
+  private reconnectInFlight: Promise<void> | null = null
 
   constructor() {
     this.networkId = config.network === 'mainnet' ? 'mainnet' : 'testnet-10'
@@ -91,7 +92,7 @@ class KaspaClient {
   }
 
   /**
-   * Wait for RPC connection with a timeout (for callers that want to wait for reconnection)
+   * Wait for RPC connection with a timeout, attempting explicit reconnect if auto-reconnect fails
    */
   async waitForConnection(timeoutMs: number = 10000): Promise<void> {
     if (!rpcClient) {
@@ -99,12 +100,88 @@ class KaspaClient {
     }
     if (this.isConnected()) return
 
+    // Give auto-reconnect a chance first (poll for half the timeout)
+    const autoReconnectMs = Math.floor(timeoutMs / 2)
     const start = Date.now()
-    while (Date.now() - start < timeoutMs) {
+    while (Date.now() - start < autoReconnectMs) {
       await new Promise(resolve => setTimeout(resolve, 500))
       if (this.isConnected()) return
     }
+
+    // Auto-reconnect failed — tear down and create a fresh connection
+    logger.warn('Auto-reconnect failed, attempting explicit reconnect', { network: config.network })
+    await this.reconnect()
+
+    // Poll briefly for the new connection to establish
+    const reconnectStart = Date.now()
+    const remainingMs = timeoutMs - (Date.now() - start)
+    while (Date.now() - reconnectStart < Math.max(remainingMs, 5000)) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      if (this.isConnected()) {
+        logger.info('Explicit reconnect succeeded', { network: config.network })
+        return
+      }
+    }
     throw new Error(`Kaspa RPC did not reconnect within ${timeoutMs}ms`)
+  }
+
+  /**
+   * Force reconnect by tearing down the current client and creating a fresh one.
+   * Uses single-flight guard so concurrent callers share the same reconnect attempt.
+   */
+  async reconnect(): Promise<void> {
+    // If a reconnect is already in progress, all callers await the same promise
+    if (this.reconnectInFlight) {
+      return this.reconnectInFlight
+    }
+
+    this.reconnectInFlight = this.doReconnect()
+    try {
+      await this.reconnectInFlight
+    } finally {
+      this.reconnectInFlight = null
+    }
+  }
+
+  private async doReconnect(): Promise<void> {
+    try {
+      const oldClient = rpcClient
+
+      // Build and connect new client before swapping (atomic swap)
+      const wasm = await loadKaspaWasm()
+      const resolver = new wasm.Resolver()
+      const newClient = new wasm.RpcClient({
+        resolver,
+        networkId: this.networkId
+      })
+
+      await newClient.connect()
+
+      newClient.addEventListener('connect', () => {
+        this.disconnectedLogged = false
+        logger.info('Kaspa RPC connected', { network: config.network })
+      })
+
+      newClient.addEventListener('disconnect', () => {
+        if (!this.disconnectedLogged) {
+          this.disconnectedLogged = true
+          logger.warn('Kaspa RPC disconnected, auto-reconnect in progress', { network: config.network })
+        }
+      })
+
+      // Swap to new client, then tear down old one
+      rpcClient = newClient
+      this.initialized = true
+
+      if (oldClient) {
+        try { await oldClient.disconnect() } catch { /* ignore disconnect errors on old client */ }
+      }
+
+      logger.info('Kaspa client reconnected', { network: config.network, networkId: this.networkId })
+    } catch (error: any) {
+      logger.error('Explicit reconnect failed', { error: error?.message || String(error) })
+      throw error
+    }
   }
 
   /**

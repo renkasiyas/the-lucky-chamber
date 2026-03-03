@@ -290,8 +290,8 @@ describe('PayoutService', () => {
 
       // Should have been called 3 times total (1 initial + 2 retries)
       expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(3)
-      // waitForConnection called on attempt 2 only (skipped on 1st and last attempt)
-      expect(kaspaClient.waitForConnection).toHaveBeenCalledTimes(1)
+      // waitForConnection called on attempts 1-2 (skipped on last attempt only)
+      expect(kaspaClient.waitForConnection).toHaveBeenCalledTimes(2)
     }, 15000)
 
     it('should not retry sendPayout on business logic error', async () => {
@@ -315,8 +315,8 @@ describe('PayoutService', () => {
 
       // Only called once per seat (1 attempt, no retries)
       expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(1)
-      // waitForConnection never called on first attempt
-      expect(kaspaClient.waitForConnection).not.toHaveBeenCalled()
+      // waitForConnection called once on first attempt to ensure connection
+      expect(kaspaClient.waitForConnection).toHaveBeenCalledTimes(1)
     })
 
     it('should retry sendRefunds on connection error and eventually throw', async () => {
@@ -333,8 +333,8 @@ describe('PayoutService', () => {
 
       // Should have been called 5 times total (1 initial + 4 retries)
       expect(kaspaClient.getUtxosByAddress).toHaveBeenCalledTimes(5)
-      // waitForConnection called on attempts 2-4 (skipped on 1st and last attempt)
-      expect(kaspaClient.waitForConnection).toHaveBeenCalledTimes(3)
+      // waitForConnection called on attempts 1-4 (skipped on last attempt only)
+      expect(kaspaClient.waitForConnection).toHaveBeenCalledTimes(4)
     }, 120000)
 
     it('should not retry sendRefunds on business logic error', async () => {
