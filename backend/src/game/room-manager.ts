@@ -1295,7 +1295,7 @@ export class RoomManager {
 
   /**
    * Retry refunds for ABORTED rooms where refund was attempted but failed.
-   * Identifies rooms with confirmed deposits but no refund records in the database.
+   * Identifies rooms with deposits (confirmed or with wallet address) but no refund records.
    * Called on startup (after recoverStaleRooms) and periodically via checkExpiredRooms.
    */
   async recoverFailedRefunds(): Promise<void> {
@@ -1306,18 +1306,33 @@ export class RoomManager {
       if (room.state !== RoomState.ABORTED) continue
       if (this.refundInProgress.has(room.id)) continue
 
-      const confirmedSeats = room.seats.filter(s => s.confirmed && s.walletAddress)
-      if (confirmedSeats.length === 0) continue
+      // Check seats with wallet addresses — even if not confirmed, on-chain UTXOs may exist
+      // (deposit monitor may have missed confirmation due to RPC disconnect)
+      const seatsWithWallets = room.seats.filter(s => s.walletAddress)
+      if (seatsWithWallets.length === 0) continue
 
-      // Check if refunds were already successfully recorded for all confirmed seats
+      // Check if refunds were already successfully recorded for all seats
       const existingRefunds = store.getRefunds(room.id)
-      if (existingRefunds.length >= confirmedSeats.length) continue
+      if (existingRefunds.length >= seatsWithWallets.length) continue
 
-      // This room has confirmed deposits but incomplete refund records — retry
+      // Skip rooms older than 1 hour that already have refund tx IDs recorded —
+      // if refunds were sent but records are incomplete, the tx is already broadcast
+      const existingRefundTxIds = room.refundTxIds || []
+      if (existingRefundTxIds.length > 0) continue
+
+      // For rooms with no refund tx IDs: retry for up to 1 hour after abort
+      // (covers late deposits from slow broadcast/confirmation).
+      // After 1 hour, stop retrying — any remaining UTXOs are recoverable manually.
+      const ageMs = Date.now() - room.updatedAt
+      const ONE_HOUR_MS = 60 * 60 * 1000
+      if (ageMs > ONE_HOUR_MS) continue
+
+      // This room may have unrefunded deposits — sendRefunds will check on-chain UTXOs
       logger.warn('Retrying failed refund for aborted room', {
         roomId: room.id,
-        confirmedSeats: confirmedSeats.length,
-        existingRefunds: existingRefunds.length
+        seatsWithWallets: seatsWithWallets.length,
+        confirmedSeats: room.seats.filter(s => s.confirmed).length,
+        ageMinutes: Math.round(ageMs / 60000)
       })
 
       this.refundInProgress.add(room.id)
@@ -1325,10 +1340,9 @@ export class RoomManager {
         const { payoutService } = await import('../crypto/services/payout-service.js')
         const refundTxIds = await payoutService.sendRefunds(room.id)
 
-        room.refundTxIds = refundTxIds
-        store.updateRoom(room.id, { refundTxIds })
-
         if (refundTxIds.length > 0) {
+          room.refundTxIds = refundTxIds
+          store.updateRoom(room.id, { refundTxIds })
           logRoomEvent('Failed refund recovered successfully', room.id, { txIds: refundTxIds })
           recoveredCount++
         } else {

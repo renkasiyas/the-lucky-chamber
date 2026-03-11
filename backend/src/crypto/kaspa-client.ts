@@ -34,6 +34,8 @@ class KaspaClient {
   private networkId: string
   private disconnectedLogged: boolean = false
   private reconnectInFlight: Promise<void> | null = null
+  private keepAliveHandle: NodeJS.Timeout | null = null
+  private static KEEPALIVE_INTERVAL_MS = 30_000 // Ping every 30s to prevent idle disconnect
 
   constructor() {
     this.networkId = config.network === 'mainnet' ? 'mainnet' : 'testnet-10'
@@ -72,10 +74,37 @@ class KaspaClient {
         }
       })
 
+      this.startKeepAlive()
+
       logger.info('Kaspa client initialized', { network: config.network, networkId: this.networkId })
     } catch (error: any) {
       logger.error('Failed to initialize Kaspa client', { error: error?.message || String(error) })
       throw error
+    }
+  }
+
+  /**
+   * Periodic lightweight RPC call to keep the WebSocket connection alive.
+   * Kaspa nodes drop idle connections after ~60s; this prevents that.
+   */
+  private startKeepAlive(): void {
+    this.stopKeepAlive()
+    this.keepAliveHandle = setInterval(async () => {
+      if (!rpcClient || !this.isConnected()) return
+      try {
+        await rpcClient.getBlockDagInfo()
+      } catch {
+        // Non-fatal — the disconnect listener will handle reconnection
+      }
+    }, KaspaClient.KEEPALIVE_INTERVAL_MS)
+    // Don't let keepalive prevent process exit
+    this.keepAliveHandle.unref()
+  }
+
+  private stopKeepAlive(): void {
+    if (this.keepAliveHandle) {
+      clearInterval(this.keepAliveHandle)
+      this.keepAliveHandle = null
     }
   }
 
@@ -176,6 +205,8 @@ class KaspaClient {
       if (oldClient) {
         try { await oldClient.disconnect() } catch { /* ignore disconnect errors on old client */ }
       }
+
+      this.startKeepAlive()
 
       logger.info('Kaspa client reconnected', { network: config.network, networkId: this.networkId })
     } catch (error: any) {
@@ -297,6 +328,7 @@ class KaspaClient {
    * Disconnect from the network
    */
   async disconnect(): Promise<void> {
+    this.stopKeepAlive()
     if (rpcClient) {
       await rpcClient.disconnect()
       rpcClient = null
