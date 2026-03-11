@@ -185,34 +185,42 @@ export class PayoutService {
         }
 
         // Gather UTXOs from ALL seat deposit addresses (deposits go to per-seat addresses)
+        // Also track which seats have on-chain UTXOs — this is the source of truth for refunds,
+        // not the DB confirmed flag (deposit monitor may miss confirmation due to RPC disconnects)
         const allEntries: any[] = []
         const allPrivateKeys: any[] = []
+        const seatAmounts = new Map<number, bigint>() // per-seat on-chain totals
         let totalAmount = 0n
 
         for (const seat of room.seats) {
           const { utxos } = await kaspaClient.getUtxosByAddress(seat.depositAddress)
           if (utxos.length === 0) continue
 
+          let seatTotal = 0n
           const seatKeypair = walletManager.deriveSeatKeypair(roomId, seat.index)
           const seatAddress = new kaspaWasm.Address(seat.depositAddress)
 
           for (const utxo of utxos) {
+            const amount = BigInt(utxo.amount)
             allEntries.push({
               address: seatAddress,
               outpoint: utxo.outpoint,
               scriptPublicKey: kaspaWasm.payToAddressScript(seatAddress),
-              amount: BigInt(utxo.amount),
+              amount,
               isCoinbase: utxo.isCoinbase || false,
               blockDaaScore: BigInt(utxo.blockDaaScore || 0)
             })
-            totalAmount += BigInt(utxo.amount)
+            seatTotal += amount
+            totalAmount += amount
           }
 
+          seatAmounts.set(seat.index, seatTotal)
           allPrivateKeys.push(seatKeypair.privateKey)
 
           logger.debug('Collected UTXOs from seat for refund', {
             seatIndex: seat.index,
             utxoCount: utxos.length,
+            seatTotalSompi: seatTotal.toString(),
             depositAddress: seat.depositAddress
           })
         }
@@ -222,36 +230,29 @@ export class PayoutService {
           return []
         }
 
-        // Only refund seats that actually deposited (confirmed = deposit received)
-        // Players who joined but didn't deposit shouldn't get a share of the pot
-        const confirmedSeats = room.seats.filter(s => s.walletAddress && s.confirmed)
-        if (confirmedSeats.length === 0) {
-          logger.warn('No confirmed deposits to refund', { roomId })
+        // Only refund seats that have BOTH a wallet address AND on-chain UTXOs.
+        // On-chain UTXOs are the sole source of truth — not the DB confirmed flag,
+        // which may be stale if the deposit monitor missed confirmation due to RPC disconnects.
+        const refundableSeats = room.seats.filter(s =>
+          s.walletAddress && seatAmounts.has(s.index)
+        )
+        if (refundableSeats.length === 0) {
+          logger.warn('No seats with on-chain UTXOs and wallet addresses to refund', { roomId })
           return []
         }
 
-        logger.info('Refunding confirmed depositors only', {
+        logger.info('Refunding depositors', {
           roomId,
           totalSeats: room.seats.length,
-          joinedSeats: room.seats.filter(s => s.walletAddress).length,
-          confirmedSeats: confirmedSeats.length,
-          totalAmountSompi: totalAmount.toString(),
-          seatsWithUtxos: allPrivateKeys.length
+          refundableSeats: refundableSeats.length,
+          totalAmountSompi: totalAmount.toString()
         })
 
-        // Calculate refund amounts - subtract fees from total and split evenly among all players
-        // With 6 outputs, transaction needs ~50,000-100,000 sompi for fees
+        // Each seat gets back what they deposited, minus a share of the tx fee.
+        // Since each seat has its own deposit address, we know exactly how much each put in.
         const FEE_BUFFER = 100000n // 100,000 sompi for fees (0.001 KAS)
-        const availableForRefund = totalAmount > FEE_BUFFER ? totalAmount - FEE_BUFFER : 0n
-        const refundPerSeat = availableForRefund / BigInt(confirmedSeats.length)
+        const feePerSeat = FEE_BUFFER / BigInt(refundableSeats.length)
 
-        if (refundPerSeat === 0n) {
-          logger.warn('Insufficient funds for refunds after fees', { roomId, totalAmount: totalAmount.toString() })
-          return []
-        }
-
-        // Build outputs - refund each player with a wallet address
-        // Track refund details for database recording
         const outputs: any[] = []
         const refundDetails: Array<{
           seatIndex: number
@@ -261,11 +262,15 @@ export class PayoutService {
           amount: number
         }> = []
 
-        for (const seat of confirmedSeats) {
-          const amountKAS = Number(refundPerSeat) / SOMPI_PER_KAS
+        for (const seat of refundableSeats) {
+          const seatDeposit = seatAmounts.get(seat.index) || 0n
+          const refundAmount = seatDeposit > feePerSeat ? seatDeposit - feePerSeat : 0n
+          if (refundAmount === 0n) continue
+
+          const amountKAS = Number(refundAmount) / SOMPI_PER_KAS
           outputs.push({
             address: new kaspaWasm.Address(seat.walletAddress!),
-            amount: refundPerSeat
+            amount: refundAmount
           })
           refundDetails.push({
             seatIndex: seat.index,
@@ -277,7 +282,7 @@ export class PayoutService {
           logger.info('Adding refund output', {
             seatIndex: seat.index,
             address: seat.walletAddress,
-            amountSompi: refundPerSeat.toString(),
+            amountSompi: refundAmount.toString(),
             amountKAS
           })
         }

@@ -550,12 +550,28 @@ describe('RoomManager', () => {
       expect(mockSendRefunds).not.toHaveBeenCalled()
     })
 
-    it('should skip ABORTED rooms with no confirmed seats', async () => {
+    it('should attempt refund for ABORTED rooms with unconfirmed seats that have wallet addresses', async () => {
       vi.mocked(store.getAllRooms).mockReturnValue([
         createMockRoom({
           id: 'aborted-1',
           state: RoomState.ABORTED,
           seats: [createMockSeat(0, 'kaspatest:player1', { confirmed: false })],
+        }),
+      ])
+      vi.mocked(store.getRefunds).mockReturnValue([])
+
+      await roomManager.recoverFailedRefunds()
+
+      // Should attempt refund — on-chain UTXOs may exist even if deposit monitor missed confirmation
+      expect(mockSendRefunds).toHaveBeenCalledWith('aborted-1')
+    })
+
+    it('should skip ABORTED rooms with no wallet addresses', async () => {
+      vi.mocked(store.getAllRooms).mockReturnValue([
+        createMockRoom({
+          id: 'aborted-1',
+          state: RoomState.ABORTED,
+          seats: [createMockSeat(0, null as any, { confirmed: false })],
         }),
       ])
 
