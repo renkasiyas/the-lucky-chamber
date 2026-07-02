@@ -169,38 +169,57 @@ async function cmdFundJoin(artifactPath: string, botsCsv = 'bot1,bot2,bot3,bot4,
 
   // Each player contributes ONE input sized to `stake + fundingFeeShare`. We pre-size UTXOs by
   // splitting each bot's funds into an exact-value UTXO first (a "bring your stake" prep).
-  const FUND_FEE = 200_000n; // funding-tx fee (tiny; ~700B tx) — split across N inputs
-  const perInput = stake + FUND_FEE / BigInt(N);
+  const FUND_FEE = 300_000n; // funding-tx fee (~6 inputs, 1 P2SH output) — split across N inputs
+  const perInput = stake + (FUND_FEE + BigInt(N) - 1n) / BigInt(N); // ceil so Σ inputs >= pot + FUND_FEE
   log(`spec-§2 join: ${N} inputs each ~${perInput} sompi -> pot ${pot}`);
 
-  // prep: give each bot a fresh UTXO of exactly `perInput` (self-send)
-  log('prep: sizing one UTXO of', perInput.toString(), 'sompi per bot...');
+  // prep: give each bot a fresh UTXO of exactly `perInput` (self-send). Built MANUALLY (not via
+  // createTransactions) to bypass the pre-Toccata WASM's storage-mass pre-check — post-Toccata the
+  // node's standard storage-mass cap is relaxed to None, so a small-output split is accepted on-chain.
+  const { PrivateKey, SighashType, createInputSignature } = kaspa as any;
+  log('prep: sizing one UTXO of', perInput.toString(), 'sompi per bot (manual split)...');
   const preppedOutpoints: { botIdx: number; outpoint: any; amount: bigint }[] = [];
+  const PREP_FEE = 300_000n;
   for (let i = 0; i < bots.length; i++) {
     const bot = bots[i];
     const addr = new Address(bot.address);
+    const spkHex = payToAddressScript(addr).script as string;
     const utxos = await getUtxos(rpc, [bot.address]);
-    const entries = utxos.map((e: any) => ({
-      address: addr,
-      outpoint: e.outpoint,
-      scriptPublicKey: payToAddressScript(addr),
-      amount: e.amount,
-      isCoinbase: e.isCoinbase || false,
-      blockDaaScore: e.blockDaaScore,
-    }));
-    const { transactions } = await createTransactions({
-      entries,
-      outputs: [{ address: addr, amount: perInput }],
-      changeAddress: addr,
-      priorityFee: 2000000n,
-      networkId: NETWORK,
+    // pick the single largest UTXO as the funding source for the split
+    const src = utxos.map((e: any) => ({ e, amt: BigInt(e.amount) })).sort((a: any, b: any) => (a.amt > b.amt ? -1 : 1))[0];
+    if (!src || src.amt < perInput + PREP_FEE + 20_000_000n) throw new Error(`${bot.id}: no UTXO large enough to split`);
+    const change = src.amt - perInput - PREP_FEE;
+    const prepInput = {
+      previousOutpoint: { transactionId: src.e.outpoint.transactionId, index: src.e.outpoint.index },
+      signatureScript: '',
+      sequence: 0n,
+      sigOpCount: 1,
+      utxo: {
+        address: bot.address,
+        outpoint: { transactionId: src.e.outpoint.transactionId, index: src.e.outpoint.index },
+        amount: src.amt,
+        scriptPublicKey: { version: 0, script: spkHex },
+        blockDaaScore: 0n,
+        isCoinbase: false,
+      },
+    };
+    const prepOutputs = [
+      { value: perInput, scriptPublicKey: { version: 0, script: spkHex } },
+      { value: change, scriptPublicKey: { version: 0, script: spkHex } },
+    ];
+    const prepTx = new Transaction({
+      version: 0,
+      inputs: [prepInput],
+      outputs: prepOutputs,
+      lockTime: 0n,
+      subnetworkId: '0000000000000000000000000000000000000000',
+      gas: 0n,
+      payload: '',
     });
-    let prepTxid = '';
-    for (const tx of transactions) {
-      await tx.sign([bot.privateKey]);
-      prepTxid = await tx.submit(rpc);
-    }
-    // the prepped UTXO is output 0 of prepTxid (value perInput)
+    const sigPush: string = createInputSignature(prepTx, 0, new PrivateKey(bot.privHex), SighashType.All);
+    const prepInputSigned = { ...prepInput, signatureScript: sigPush };
+    delete (prepInputSigned as any).utxo;
+    const prepTxid = await submitV0(rpc, [prepInputSigned], prepOutputs, 0n);
     preppedOutpoints.push({ botIdx: i, outpoint: { transactionId: prepTxid, index: 0 }, amount: perInput });
     log(`  ${bot.id}: prepped UTXO ${prepTxid}:0 = ${perInput}`);
   }
@@ -212,7 +231,7 @@ async function cmdFundJoin(artifactPath: string, botsCsv = 'bot1,bot2,bot3,bot4,
   const contributions: FundingContribution[] = preppedOutpoints.map((p) => ({
     outpoint: p.outpoint,
     utxoAmount: p.amount,
-    utxoScriptPublicKey: { version: 0, scriptHex: bytesToHex(payToAddressScript(new Address(bots[p.botIdx].address)).script) },
+    utxoScriptPublicKey: { version: 0, scriptHex: payToAddressScript(new Address(bots[p.botIdx].address)).script as string },
     playerAddress: bots[p.botIdx].address,
   }));
   const fpskt = assembleFundingPskt({
@@ -232,10 +251,11 @@ async function cmdFundJoin(artifactPath: string, botsCsv = 'bot1,bot2,bot3,bot4,
   }
   log('all', signed.length, 'inputs signed 0x81');
 
-  // Assemble the funding tx: each input's scriptSig = push(sig 65B) for P2PK spend (0x41 <sig>).
+  // Assemble the funding tx: for a P2PK input the scriptSig IS the createInputSignature output
+  // (the complete push 0x41<64B sig><0x81 hashtype>), which DirectKeyPsktSigner returned verbatim.
   const inputs = fpskt.inputs.map((inp, i) => ({
     previousOutpoint: { transactionId: inp.outpoint.transactionId, index: inp.outpoint.index },
-    signatureScript: '41' + signed[i].signatureHex,
+    signatureScript: signed[i].signatureHex,
     sequence: 0n,
     sigOpCount: 1,
   }));

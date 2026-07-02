@@ -212,7 +212,39 @@ Fresh pot `3fced868ec4b273cffc5bc2d735942fdc3a55c9891df98dc53c7b2f1ce15868f` (P2
 - **KaspaCom indexer** (`indexer.kaspa.com/covenant-templates`, `/covenants`) is live and **mainnet** (`kaspa:` P2SH addresses). It DOES index P2SH covenant scripts and template-classifies them (`classificationKind`, an "Unknown" catch-all of ~1,496 covenants, `canonicalCovenantIdKnown`). Our TN10 pot is not present (wrong network); a novel 59 KB redeem like ours would classify as **"Unknown"** until a named template is published.
 - **DECISION:** publishing a named "Lucky Chamber" template to KaspaCom is optional and mainnet-only; the fairness display should rely on our own wallet-agnostic `verify.ts` P2SH verifier (recomputes the pot SPK byte-for-byte — proven S2), not on the KIP-20 indexer.
 
-### Proven-vs-asserted ledger (session 3, live TN10)
-- **PROVEN (broadcast + confirmed, txid):** node health; funds; **RESOLVE** end-to-end (`3a32d35d…`→`4d734453…`, outputs==oracle); **S3 D1-boundary** (FORFEIT `744781473e…` rejected pre-D1 / accepted at D1, window ~108s) = also a **FORFEIT-subset settle**; **S5 malleation** (inflated `sigops=255` self-rejects, honest `sigops=2` confirms `43ed457c…`, SAME txid); **COOP-ABORT** (`fa5110da…`, real 6-of-6 sigs, house 0); **S6** answered (P2SH ⇒ no native covenant_id; parallel room_id `8ba3ac…`; indexer classification).
-- **IN PROGRESS:** spec-§2 ANYONECANPAY fund-join broadcast (DirectKeyPsktSigner); D2 REFUND (signature-free like FORFEIT, longer CLTV wait); room-manager wiring; §5 deletions.
-- **ASSERTED (not on-chain):** D2 REFUND is mechanically identical to the proven FORFEIT/RESOLVE signature-free path (CLTV + script-forced outputs), differing only in the deadline — expect identical behavior at D2.
+### ★ D2 REFUND — PROVEN on TN10 (completes the settlement matrix)
+Fresh pot `970cfc5e763a6b7ba524472a40eaf7fb1ff1c53ced2d8420f1ded9f37422bf99` (P2SH `kaspatest:ppnnwlct…`), D2 baked = 506,709,402 (~1,400 DAA ahead). Signature-free (like FORFEIT/RESOLVE), CLTV at D2.
+- **Rejected pre-D2:** at DAA 506,708,187 (gap 1,215) — `transaction input #0 is not finalized`.
+- **Accepted at D2:** byte-identical tx `3da20539ae9eb50ad896bef63cf4313ccea26b6db81707094985b5e45be4c059` confirmed once DAA crossed D2 (506,709,407 ≥ 506,709,402). Outputs = full refund (6 seats, sum 287,000,000 = pot−fee), **house 0** (spec §6). The anyone-can-spend D2 backstop works: no one can strand the pot.
+
+### ⚠️ spec-§2 ANYONECANPAY fund-join — BLOCKED by vendored kaspa-wasm (the #1 human blocker)
+Built `DirectKeyPsktSigner implements PsktSigner` (raw test key, 0x81) + `covenant-tn10.ts fund-join`: 6 bots each pre-size a stake UTXO (manual split — bypasses the pre-Toccata WASM storage-mass pre-check, which the post-Toccata node relaxes), `assembleFundingPskt` freezes the single-P2SH-output structure, each input signed independently. **The join assembles correctly and all 6 inputs sign** — but the node rejects the broadcast: **`failed to verify the signature script: invalid hash type 0x80`**.
+- ROOT CAUSE: the VENDORED **kaspa-wasm 1.0.1 (pre-Toccata, Feb 2026)** `createInputSignature(SighashType.AllAnyOneCanPay)` emits wire hashtype **0x80** (ANYONECANPAY-only, disallowed) instead of **0x81** (ALL|ANYONECANPAY). The hashtype is hashed INTO the sighash preimage (rusty-kaspa `sighash.rs:278`), so a wire byte-flip cannot repair it. **Every kaspa-wasm in this monorepo is 1.0.1 (or 0.13.0)** — no post-Toccata build to swap in.
+- NOT a covenant defect and NOT a launch-signer defect: `assembleFundingPskt`, the `PsktSigner` seam, and tx assembly are correct (48/48 covenant vitest green); the REAL launch signer (KSNV-161 miniapp bridge → Kasanova Dart PSKT stack) was S2-proven to sign 0x81 correctly. Pot creation itself is PROVEN on-chain via `fund-simple` (every settlement above spent a real P2SH pot).
+- FIX (human's call — vendored dependency): rebuild `vendor/kaspa-wasm` from rusty-kaspa **2.0.1** (node version), OR sign the funding inputs natively (Rust kaspa-txscript, or a hand-rolled JS 0x81 sighash). Then `fund-join` should broadcast unchanged.
+
+### Proven-vs-asserted ledger (session 3, live TN10) — FINAL
+- **PROVEN (broadcast + confirmed on TN10, txid cited):**
+  - node health (2.0.1, synced, DAA≫Toccata); bot funds (20/20 ≥4,600 KAS).
+  - **RESOLVE** end-to-end: fund `3a32d35d…` → settle `4d734453…` (outputs==oracle, victim 3).
+  - **S3 D1-boundary**: FORFEIT `744781473e…` rejected pre-D1 (not finalized) / accepted at D1; window **1,075 DAA ≈ 108s**; also a **FORFEIT-subset** settle (subset {0,2,4}, outputs==oracle).
+  - **S5 compute-budget malleation**: inflated `sig_op_count=255` self-rejects (req 31.8M > fee 12.5M); honest `sig_op_count=2` confirms `43ed457c…` — **SAME txid** (budget excluded from txid, spec §6).
+  - **COOP-ABORT**: `fa5110da…` — real 6-of-6 on-chain schnorr sigs, full refund, house 0.
+  - **D2 REFUND**: `3da20539ae…` rejected pre-D2 / accepted at D2, full refund, house 0.
+  - **S6 indexing**: consensus covenant_id null (P2SH, not native covenant output); parallel room_id `8ba3ac…` derivable; KaspaCom indexer classification characterized.
+  - **Fee model**: min fee = 100 sompi/gram × max(compute, transient); 59 KB blob settle floor ≈ **0.122 KAS** (transient-bound) — corrects spec §6.
+- **BLOCKED (built + assembled, broadcast fails on WASM):** spec-§2 ANYONECANPAY fund-join — vendored kaspa-wasm 1.0.1 emits 0x80 not 0x81 (see above).
+- **NOT DONE (out of session scope):** room-manager wiring of covenant funding+settlement behind the signer seam; §5 custodial deletions (guard still unmet — do NOT delete until covenant path is wired+tested in the running game); N>6; forfeit-slash-routing review.
+
+### Test-artifact txid index (all TN10)
+| purpose | funding txid | settle txid |
+|---|---|---|
+| RESOLVE | `3a32d35d3308c7a47110b40760a12e64b6d63f7a0c16b352e851a8e9b0e2ae69` | `4d734453b1065d4b92e76a29a4462d80f3543906985b1ff929671d8997e3e582` |
+| S3 FORFEIT {0,2,4} | `ef0962c7378db9e6541ea5695b0d4f3f345ea2e8ab438893c8de24a9a91cdcd9` | `744781473e7166f904e444c9810fcf1b8ee71389f0853c4a85c7330a0c570c03` |
+| S5 honest RESOLVE | `73d1c82f4ecf632ebfb37b2a3b4ab2262809ec682ec47487f05a08480bd3f229` | `43ed457c99fc6f09f169a31e71ffb7f9c06f3efc2215762bc71df326e8a28461` |
+| COOP-ABORT | `3fced868ec4b273cffc5bc2d735942fdc3a55c9891df98dc53c7b2f1ce15868f` | `fa5110da5c01946c2b69061d9f7ebc9958e888d830f413be4cdc755f7d24663f` |
+| D2 REFUND | `970cfc5e763a6b7ba524472a40eaf7fb1ff1c53ced2d8420f1ded9f37422bf99` | `3da20539ae9eb50ad896bef63cf4313ccea26b6db81707094985b5e45be4c059` |
+| stranded (FEE too low, lesson) | `5333eedc…` (pot, unspendable at 6.8M fee) | — |
+
+### #1 thing needing a human next (session 3)
+**Rebuild `vendor/kaspa-wasm` from rusty-kaspa 2.0.1** (or provide a native 0x81 signer). It is the sole blocker for broadcasting the spec-§2 ANYONECANPAY funding join on TN10; everything else in the covenant (all four settlement paths, the D1/D2 CLTV deadlines, the malleation defense) is PROVEN on the live node. Downstream (room-manager wiring, then §5 deletions) can proceed on `fund-simple` pot creation in the interim, but §2 non-custodial custody needs the 0x81-capable signer.

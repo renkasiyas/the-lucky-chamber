@@ -9,9 +9,19 @@
 // the funding core (pskt.ts).
 //
 // WASM note: kaspa-wasm exposes `SighashType.AllAnyOneCanPay = 3` as the JS enum discriminant; the
-// on-wire byte is 0x81 (SIGHASH_ALL 0x01 | ANYONECANPAY 0x80). createInputSignature() takes the enum,
-// and the returned signature already carries the correct wire hashtype. We assert the caller asked for
-// 0x81 and translate to the enum, honoring signer.ts's "no silent downgrade" requirement.
+// on-wire byte should be 0x81 (SIGHASH_ALL 0x01 | ANYONECANPAY 0x80). createInputSignature() returns the
+// COMPLETE P2PK sig push (0x41 <64B schnorr> <hashtype>) — for a P2PK input the scriptSig IS this value.
+//
+// ⚠️ KNOWN BLOCKER (KSNV-158 session 3, TN10): the VENDORED kaspa-wasm **1.0.1 (pre-Toccata, Feb 2026)**
+// emits the wrong wire hashtype for AllAnyOneCanPay — it writes **0x80** (ANYONECANPAY-only) instead of
+// **0x81** (ALL|ANYONECANPAY). The TN10 node (rusty-kaspa 2.0.1) rejects the funding join with
+// "failed to verify the signature script: invalid hash type 0x80" (0x80 is not in the allowed set).
+// The hashtype is baked into the sighash preimage (consensus sighash.rs:278 `write_u8(hash_type.to_u8())`),
+// so a wire byte-flip cannot repair the signature. FIX (human): bump vendor/kaspa-wasm to a POST-Toccata
+// build (node runs 2.0.1) OR sign the funding inputs natively (Rust kaspa-txscript / a JS 0x81 sighash).
+// NB: the REAL launch signer (KSNV-161 miniapp bridge → Kasanova Dart PSKT stack) was S2-proven to
+// support 0x81 correctly — this bug is specific to THIS session's WASM-based direct-key TEST signer.
+// Everything up to the sign (assembleFundingPskt frozen structure, per-input seam, tx assembly) is correct.
 
 import kaspa from '../../../vendor/kaspa-wasm/kaspa.js';
 import { FundingPskt, SIGHASH_ALL_ANYONECANPAY } from './pskt';
