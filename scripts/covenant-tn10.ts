@@ -1,7 +1,8 @@
-// ABOUTME: Operational broadcaster for the Lucky Chamber covenant on TN10 (KSNV-158 session 3).
-// ABOUTME: Funds the pot P2SH (simple + spec-§2 ANYONECANPAY join via DirectKeyPsktSigner) and
-// ABOUTME: broadcasts signature-free settlements (RESOLVE/FORFEIT/REFUND) + COOP-ABORT against the
-// ABOUTME: Kasanova JSON-wRPC node. Every on-chain claim is cited by txid. TN10 ONLY — never mainnet.
+// ABOUTME: Operational broadcaster for the Lucky Chamber covenant on TN10 (KSNV-158).
+// ABOUTME: Funds the pot P2SH (simple + spec-§2 ANYONECANPAY 0x81 join via the native Rust ground-truth
+// ABOUTME: signer `covenant-harness/fund_sign`, KSNV-172) and broadcasts signature-free settlements
+// ABOUTME: (RESOLVE/FORFEIT/REFUND) + COOP-ABORT against the Kasanova JSON-wRPC node. Every on-chain claim
+// ABOUTME: is cited by txid. TN10 ONLY — never mainnet.
 //
 // Usage (run with tsx):
 //   npx tsx scripts/covenant-tn10.ts <cmd> [args]
@@ -15,8 +16,10 @@
 import kaspa from '../vendor/kaspa-wasm/kaspa.js';
 import fs from 'fs';
 import crypto from 'crypto';
-import { assembleFundingPskt, FundingContribution, SIGHASH_ALL_ANYONECANPAY } from '../backend/src/covenant/pskt';
-import { DirectKeyPsktSigner } from '../backend/src/covenant/direct-key-signer';
+import { assembleFundingPskt, FundingContribution } from '../backend/src/covenant/pskt';
+import { execFileSync } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const {
   RpcClient,
@@ -104,6 +107,45 @@ async function submitV0(
   return transactionId;
 }
 
+/**
+ * Sign the funding join's N inputs with SIGHASH_ALL|ANYONECANPAY (0x81) via the Rust ground-truth signer
+ * (covenant-harness `fund_sign`), which computes the sighash with rusty-kaspa v2.0.1 consensus code and
+ * self-verifies each signed input on the local txscript VM before returning. This replaces the vendored
+ * kaspa-wasm 1.0.1 path (KSNV-172), which emitted the wrong wire hashtype 0x80 and the node rejected it.
+ * The submitted tx MUST carry the same version(0)/lockTime(0)/sequence(0)/sigOpCount(1)/outputs fed here,
+ * or the v0 sighash won't match.
+ */
+function nativeSignFundingInputs(
+  fpskt: { inputs: any[] },
+  potSpk: { version: number; scriptHex: string },
+  pot: bigint,
+  privForIndex: (i: number) => string
+): { inputIndex: number; scriptSigHex: string; pubKeyHex: string }[] {
+  const spec = {
+    version: 0,
+    lockTime: '0',
+    outputs: [{ value: pot.toString(), spkVersion: potSpk.version, spkHex: potSpk.scriptHex }],
+    inputs: fpskt.inputs.map((inp: any, i: number) => ({
+      txid: inp.outpoint.transactionId,
+      index: inp.outpoint.index,
+      sequence: '0',
+      sigOpCount: 1,
+      utxoAmount: inp.utxoAmount.toString(),
+      utxoSpkVersion: inp.utxoScriptPublicKey.version,
+      utxoSpkHex: inp.utxoScriptPublicKey.scriptHex,
+      privHex: privForIndex(i),
+    })),
+  };
+  const bin = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../covenant-harness/lc-harness-target/release/fund_sign'
+  );
+  const out = execFileSync(bin, [], { input: JSON.stringify(spec), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  const parsed = JSON.parse(out.trim());
+  if (!parsed.selfVerified) throw new Error('fund_sign did not self-verify the funding inputs');
+  return parsed.inputs;
+}
+
 // ---------------------------------------------------------------- commands
 
 async function cmdNodeHealth() {
@@ -169,7 +211,9 @@ async function cmdFundJoin(artifactPath: string, botsCsv = 'bot1,bot2,bot3,bot4,
 
   // Each player contributes ONE input sized to `stake + fundingFeeShare`. We pre-size UTXOs by
   // splitting each bot's funds into an exact-value UTXO first (a "bring your stake" prep).
-  const FUND_FEE = 300_000n; // funding-tx fee (~6 inputs, 1 P2SH output) — split across N inputs
+  // funding-tx fee: must clear the node's compute-mass floor (measured 722,500 sompi = 100 sompi/gram ×
+  // 7,225 compute mass for the 6-input/1-output join). 1.0M sompi clears it with margin. Split across N inputs.
+  const FUND_FEE = 1_000_000n;
   const perInput = stake + (FUND_FEE + BigInt(N) - 1n) / BigInt(N); // ceil so Σ inputs >= pot + FUND_FEE
   log(`spec-§2 join: ${N} inputs each ~${perInput} sompi -> pot ${pot}`);
 
@@ -243,19 +287,22 @@ async function cmdFundJoin(artifactPath: string, botsCsv = 'bot1,bot2,bot3,bot4,
   });
   log('FundingPskt assembled: inputs', fpskt.inputs.length, 'fee', fpskt.fee.toString());
 
-  // Sign each input independently with DirectKeyPsktSigner (0x81).
-  const signer = new DirectKeyPsktSigner((idx) => bots[idx].privHex);
-  const signed = [];
-  for (let i = 0; i < fpskt.inputs.length; i++) {
-    signed.push(await signer.signInput({ pskt: fpskt, inputIndex: i, sighashType: SIGHASH_ALL_ANYONECANPAY }));
-  }
-  log('all', signed.length, 'inputs signed 0x81');
+  // Sign each input independently with the Rust ground-truth 0x81 signer (KSNV-172 fix): rusty-kaspa
+  // v2.0.1 consensus sign_input, self-verified on the local txscript VM before it returns. The vendored
+  // kaspa-wasm 1.0.1 path emitted wire hashtype 0x80 and the node rejected the join.
+  const signed = nativeSignFundingInputs(
+    fpskt,
+    { version: potSpk.version, scriptHex: potSpk.scriptHex },
+    pot,
+    (idx) => bots[idx].privHex
+  );
+  log('all', signed.length, 'inputs signed 0x81 (native, self-verified on v2.0.1 VM)');
 
-  // Assemble the funding tx: for a P2PK input the scriptSig IS the createInputSignature output
-  // (the complete push 0x41<64B sig><0x81 hashtype>), which DirectKeyPsktSigner returned verbatim.
+  // Assemble the funding tx: for a P2PK input the scriptSig IS the sign_input output
+  // (the complete push 0x41<64B sig><0x81 hashtype>), which the native signer returned verbatim.
   const inputs = fpskt.inputs.map((inp, i) => ({
     previousOutpoint: { transactionId: inp.outpoint.transactionId, index: inp.outpoint.index },
-    signatureScript: signed[i].signatureHex,
+    signatureScript: signed[i].scriptSigHex,
     sequence: 0n,
     sigOpCount: 1,
   }));

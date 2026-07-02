@@ -248,3 +248,40 @@ Built `DirectKeyPsktSigner implements PsktSigner` (raw test key, 0x81) + `covena
 
 ### #1 thing needing a human next (session 3)
 **Rebuild `vendor/kaspa-wasm` from rusty-kaspa 2.0.1** (or provide a native 0x81 signer). It is the sole blocker for broadcasting the spec-§2 ANYONECANPAY funding join on TN10; everything else in the covenant (all four settlement paths, the D1/D2 CLTV deadlines, the malleation defense) is PROVEN on the live node. Downstream (room-manager wiring, then §5 deletions) can proceed on `fund-simple` pot creation in the interim, but §2 non-custodial custody needs the 0x81-capable signer.
+
+---
+
+## 2026-07-02 — Session 4: the players-fund-together join broadcasts on TN10 (KSNV-172 resolved)
+
+**Result in one line:** six separate wallets each signed one input `SIGHASH_ALL|ANYONECANPAY` (0x81) and the node accepted a single funding tx creating the pot — the spec-§2 atomic join, live on TN10. This was the one on-chain proof missing after session 3.
+
+### The fix — native 0x81 signer, not a WASM rebuild (KSNV-172)
+Root cause was already nailed in session 3: vendored kaspa-wasm 1.0.1 emits wire hashtype 0x80 for AllAnyOneCanPay; the node (2.0.1) rejects it because 0x80 (ANYONECANPAY-only) is not in `ALLOWED_SIG_HASH_TYPES_VALUES`, and the hashtype is baked into the sighash preimage so a wire byte-flip can't repair it. Rather than rebuild the WASM, I signed the funding inputs with **rusty-kaspa v2.0.1's OWN consensus code**:
+- New Rust bin `covenant-harness/src/bin/fund_sign.rs` calls `kaspa_consensus_core::sign::sign_input(tx, i, priv, SIG_HASH_ALL | SIG_HASH_ANY_ONE_CAN_PAY)` → `calc_schnorr_signature_hash` (ground-truth sighash, zero reimplementation) → returns the complete P2PK push `41<64B schnorr><0x81>`. It then **executes each signed input on the local v2.0.1 `TxScriptEngine`** (P2PK checksig) and refuses to emit unless every input ACCEPTs. So the broadcaster never submits an unverified signature.
+- `fund_sign --selftest` (ground truth, no spend, PASS): (a) all 6 of a synthetic N=6 join sign 0x81 and validate on the VM; (b) ANYONECANPAY independence — corrupting one input's sig leaves the other 5 individually valid; (c) `SigHashType::from_u8(0x80)` is REJECTED by consensus (the exact on-chain failure reproduced locally).
+- `scripts/covenant-tn10.ts` `fund-join`: replaced the broken `DirectKeyPsktSigner` (WASM 0x81) with `nativeSignFundingInputs()`, which shells to the built `fund_sign` binary. The funding core (`assembleFundingPskt`) is unchanged; the signer swap is behind the same frozen-output-set contract. `direct-key-signer.ts` is now unused (kept as the documented record of the WASM 0x80 blocker).
+
+### ★ spec-§2 ANYONECANPAY join — PROVEN on TN10
+Artifact `deploy_join.fixture.json` (N=6, stake 50,000,000, pot 300,000,000, baked settle FEE 13,000,000, pot P2SH `aa202d8a7f899f83f74b7022637e18d6b6bec79d8a1006017d6d64bf481515bce7f687` = `kaspatest:pqkc5lufn7plwjmsyf3huxxkk6lv08v2zqrqzltdvjl5s9g4hnnlv9h64nw5a`).
+- Preps: 6 bots each self-sent one exact-value UTXO of 50,166,667 sompi (perInput = stake + fee share).
+- **JOIN funding tx `ec3dd3ce6f387cd4a1733a19eecbe35539d3ed6dac3ecf73302998faaa77444f` — ACCEPTED** (`is_accepted:true` via `api-tn10.kaspa.org`). Independently verified WHAT IT DID, not just that it submitted:
+  - **6 inputs, 6 DISTINCT addresses** (`qqtrwmjl…`, `qzevum3l…`, `qruny2al…`, `qrl000c7…`, `qpr4uekj…`, `qpeqzfvc…`), each spending one bot's prepped UTXO of 50,166,667 sompi — genuinely six players funding together (not one wallet as in every session-3 `fund-simple` pot).
+  - **1 output** = 300,000,000 sompi to the pot P2SH above. Fee = 1,000,002 sompi.
+  - Node accepting 6 sigs whose push ends `0x81` (a `0x80` join was rejected minutes earlier: "invalid hash type 0x80") IS the proof they're valid 0x81 signatures.
+- **Fee note:** the join's compute-mass floor was measured on-chain = 722,500 sompi (100 sompi/gram × 7,225 compute mass) for the 6-input/1-output shape; `FUND_FEE` bumped 300k → 1.0M to clear it (a first submit at 300k was rejected under-fee, then accepted at 1.0M).
+
+### Honest scope — what this does and does NOT prove
+- PROVEN: the atomic 6-way 0x81 join creates the pot on a live 2.0.1 node; the custody model (players contribute inputs, single frozen pot output, no server key) works end-to-end on-chain. KSNV-172 blocker is gone via the native signer (spec §2/§8 WASM-rebuild-vs-native question resolved in favor of native ground-truth signing).
+- STILL STUBBED (unchanged this session): (1) the "players" are 6 bots derived from one mnemonic via a direct-key TEST signer, NOT real users on the production Kasanova miniapp bridge (`Kasanova.signPskt`, KSNV-161 — still needs the bridge adapter, unmerged). (2) Settlement still pays the placeholder/dummy SPKs baked as test constants — real payout recipients + room-manager wiring is the next job (handoff task #2), untouched here.
+
+### Gate status delta
+- **S4 (adversarial TN10 campaign):** the funding-join leg — previously BLOCKED — is now PROVEN. Combined with session 3's {RESOLVE, FORFEIT subset, COOP-ABORT, D2 REFUND, D1 boundary, S5 malleation}, the whole settlement matrix + the join are on-chain. Remaining S4 work is the real-roster (non-dummy) end-to-end, which depends on room-manager wiring.
+- **S2 (wallet sighash):** capability was proven on the Kasanova Dart stack in session 1; this session proves 0x81 end-to-end on-chain via a native signer. Production integration (miniapp bridge) still pending.
+
+### Test-artifact txid index (session 4)
+| purpose | funding txid | notes |
+|---|---|---|
+| spec-§2 ANYONECANPAY JOIN | `ec3dd3ce6f387cd4a1733a19eecbe35539d3ed6dac3ecf73302998faaa77444f` | 6 distinct bot inputs (0x81) → 1 pot P2SH `aa202d8a…87`; is_accepted:true |
+
+### #1 thing needing a human/next session
+**Wire the covenant funding + settlement into `room-manager` with REAL player + treasury addresses** (kill the placeholder SPK constants; payout SPKs must come from actual seats), keeping the custodial path gated until the covenant path works (handoff task #2). Then the spec §5 custodial deletions, then mainnet cutover. The production signer path also needs the `Kasanova.signPskt` miniapp-bridge adapter (KSNV-161) so real users — not the direct-key test rig — sign the join.
