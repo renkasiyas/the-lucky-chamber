@@ -341,6 +341,51 @@ fn coop_sigs(redeem: &[u8], outputs: &[TransactionOutput]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+fn to_hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Emit the P2SH verification artifact consumed by the wallet-agnostic TS verifier (backend/frontend).
+/// ALSO self-checks the P2SH formula in Rust: aa20 <blake2b256(redeem)> 87 == pay_to_script_hash_script(redeem).
+fn emit_verifier_artifact(compiled: &CompiledContract, baked: &Baked) {
+    let blob = &compiled.script;
+    let spk = pay_to_script_hash_script(blob);
+    let script_hash = blake2b256(blob);
+    // Rust ground-truth self-check: reconstruct the standard P2SH SPK bytes and assert equality.
+    let mut manual = vec![0xaau8, 0x20u8];
+    manual.extend_from_slice(&script_hash);
+    manual.push(0x87u8);
+    assert_eq!(spk.script(), manual.as_slice(), "P2SH SPK formula mismatch (aa20<blake2b(redeem)>87)");
+
+    let server0 = make_secret(0, 99);
+    let all0: Vec<Vec<u8>> = (0..N as u8).map(|i| make_secret(0, i)).collect();
+    let constants = serde_json::json!({
+        "cSrv": to_hex(&sha256(&server0)),
+        "commits": (0..N).map(|i| to_hex(&sha256(&all0[i]))).collect::<Vec<_>>(),
+        "payoutSpks": baked.payout_spks.iter().map(|s| to_hex(&spk_to_bytes(s))).collect::<Vec<_>>(),
+        "houseSpk": to_hex(&spk_to_bytes(&baked.house_spk)),
+        "coopPubkeys": (0..N).map(coop_xonly).map(|v| to_hex(&v)).collect::<Vec<_>>(),
+        "ctx": to_hex(&baked.ctx),
+        "D1": D1, "D2": D2,
+    });
+    let artifact = serde_json::json!({
+        "meta": {
+            "source": "covenant-harness/src/bin/combined_blob.rs emit_verifier_artifact (seed=0 game instance)",
+            "note": "P2SH = ScriptPublicKey{version, aa20 <blake2b256(redeem)> 87}. version/script from rusty-kaspa v2.0.1 pay_to_script_hash_script.",
+            "N": N, "entrypoints": compiled.abi.len(),
+        },
+        "scriptPublicKey": { "version": spk.version(), "scriptHex": to_hex(spk.script()) },
+        "redeemScriptHashHex": to_hex(&script_hash),
+        "redeemScriptLen": blob.len(),
+        "redeemScriptHex": to_hex(blob),
+        "stateLayout": { "start": compiled.state_layout.start, "len": compiled.state_layout.len },
+        "bakedConstants": constants,
+    });
+    let out = "/Volumes/OdessaExt/Kasanova/games/the-lucky-chamber/backend/src/covenant/redeem_artifact.fixture.json";
+    std::fs::write(out, serde_json::to_string_pretty(&artifact).unwrap()).expect("write artifact fixture");
+    println!("verifier artifact written: {out} (redeem {} B, spk {} B)", blob.len(), spk.script().len());
+}
+
 fn main() {
     let ctx = vec![0x11u8; 32];
     let baked = Baked {
@@ -371,6 +416,9 @@ fn main() {
     assert!(blob_len < 1_000_000, "blob exceeds post-Toccata script ceiling");
     // sanity: same source => identical blob length across seeds (only baked 32B constants differ)
     assert!(compiled_by_seed.iter().all(|c| c.script.len() == blob_len), "blob length must be seed-invariant");
+
+    // --- Item 3a: emit the P2SH verification artifact for the wallet-agnostic TS verifier (backend + frontend) ---
+    emit_verifier_artifact(&compiled_by_seed[0], &baked);
 
     let mut total = 0usize;
     let mut pass = 0usize;
