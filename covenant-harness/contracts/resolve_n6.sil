@@ -1,0 +1,100 @@
+pragma silverscript ^0.1.0;
+
+// RESOLVE branch, N=6, R=6 (all players + server reveal). Signature-free settlement:
+// secrets are the authorization, outputs are script-forced. Baked constants come from the
+// constructor (commits, payout SPKs, house SPK, ctx nonce, exact survivor/house amounts).
+// Death roll per round k: h_k = int(blake2b(col_k || ctx || k)[0:7]); died_k = (h_k % (7-k)) == 0.
+// Victim = seat (firstDeathRound - 1). Round 6 uses divisor 1 => always dies => the `else` branch.
+contract ResolveN6(
+    byte[32] cSrv,
+    byte[32] c0, byte[32] c1, byte[32] c2, byte[32] c3, byte[32] c4, byte[32] c5,
+    byte[] spk0, byte[] spk1, byte[] spk2, byte[] spk3, byte[] spk4, byte[] spk5,
+    byte[] houseSpk,
+    byte[32] ctx,
+    int survivorShare,
+    int houseAmount
+) {
+    entrypoint function resolve(
+        byte[192] sSrv,
+        byte[192] s0, byte[192] s1, byte[192] s2, byte[192] s3, byte[192] s4, byte[192] s5
+    ) {
+        // 1) commit openings
+        require(sha256(sSrv) == cSrv);
+        require(sha256(s0) == c0);
+        require(sha256(s1) == c1);
+        require(sha256(s2) == c2);
+        require(sha256(s3) == c3);
+        require(sha256(s4) == c4);
+        require(sha256(s5) == c5);
+
+        // 2) round replay (columns = shard k of every secret, server first, CONCAT not XOR)
+        int h1 = int(blake2b(sSrv.slice(0, 32) + s0.slice(0, 32) + s1.slice(0, 32) + s2.slice(0, 32) + s3.slice(0, 32) + s4.slice(0, 32) + s5.slice(0, 32) + ctx + 0x01).slice(0, 7));
+        bool d1 = (h1 % 6) == 0;
+        int h2 = int(blake2b(sSrv.slice(32, 64) + s0.slice(32, 64) + s1.slice(32, 64) + s2.slice(32, 64) + s3.slice(32, 64) + s4.slice(32, 64) + s5.slice(32, 64) + ctx + 0x02).slice(0, 7));
+        bool d2 = (h2 % 5) == 0;
+        int h3 = int(blake2b(sSrv.slice(64, 96) + s0.slice(64, 96) + s1.slice(64, 96) + s2.slice(64, 96) + s3.slice(64, 96) + s4.slice(64, 96) + s5.slice(64, 96) + ctx + 0x03).slice(0, 7));
+        bool d3 = (h3 % 4) == 0;
+        int h4 = int(blake2b(sSrv.slice(96, 128) + s0.slice(96, 128) + s1.slice(96, 128) + s2.slice(96, 128) + s3.slice(96, 128) + s4.slice(96, 128) + s5.slice(96, 128) + ctx + 0x04).slice(0, 7));
+        bool d4 = (h4 % 3) == 0;
+        int h5 = int(blake2b(sSrv.slice(128, 160) + s0.slice(128, 160) + s1.slice(128, 160) + s2.slice(128, 160) + s3.slice(128, 160) + s4.slice(128, 160) + s5.slice(128, 160) + ctx + 0x05).slice(0, 7));
+        bool d5 = (h5 % 2) == 0;
+        // round 6 divisor is 1 => always dies => handled by the final else (victim 5)
+
+        // 3) script-forced payout table per victim (survivors in ascending seat order, house last)
+        if (d1) {
+            // victim 0: survivors 1,2,3,4,5
+            require(tx.outputs.length == 6);
+            require(tx.outputs[0].scriptPubKey == spk1); require(tx.outputs[0].value == survivorShare);
+            require(tx.outputs[1].scriptPubKey == spk2); require(tx.outputs[1].value == survivorShare);
+            require(tx.outputs[2].scriptPubKey == spk3); require(tx.outputs[2].value == survivorShare);
+            require(tx.outputs[3].scriptPubKey == spk4); require(tx.outputs[3].value == survivorShare);
+            require(tx.outputs[4].scriptPubKey == spk5); require(tx.outputs[4].value == survivorShare);
+            require(tx.outputs[5].scriptPubKey == houseSpk); require(tx.outputs[5].value == houseAmount);
+        } else if (d2) {
+            // victim 1: survivors 0,2,3,4,5
+            require(tx.outputs.length == 6);
+            require(tx.outputs[0].scriptPubKey == spk0); require(tx.outputs[0].value == survivorShare);
+            require(tx.outputs[1].scriptPubKey == spk2); require(tx.outputs[1].value == survivorShare);
+            require(tx.outputs[2].scriptPubKey == spk3); require(tx.outputs[2].value == survivorShare);
+            require(tx.outputs[3].scriptPubKey == spk4); require(tx.outputs[3].value == survivorShare);
+            require(tx.outputs[4].scriptPubKey == spk5); require(tx.outputs[4].value == survivorShare);
+            require(tx.outputs[5].scriptPubKey == houseSpk); require(tx.outputs[5].value == houseAmount);
+        } else if (d3) {
+            // victim 2: survivors 0,1,3,4,5
+            require(tx.outputs.length == 6);
+            require(tx.outputs[0].scriptPubKey == spk0); require(tx.outputs[0].value == survivorShare);
+            require(tx.outputs[1].scriptPubKey == spk1); require(tx.outputs[1].value == survivorShare);
+            require(tx.outputs[2].scriptPubKey == spk3); require(tx.outputs[2].value == survivorShare);
+            require(tx.outputs[3].scriptPubKey == spk4); require(tx.outputs[3].value == survivorShare);
+            require(tx.outputs[4].scriptPubKey == spk5); require(tx.outputs[4].value == survivorShare);
+            require(tx.outputs[5].scriptPubKey == houseSpk); require(tx.outputs[5].value == houseAmount);
+        } else if (d4) {
+            // victim 3: survivors 0,1,2,4,5
+            require(tx.outputs.length == 6);
+            require(tx.outputs[0].scriptPubKey == spk0); require(tx.outputs[0].value == survivorShare);
+            require(tx.outputs[1].scriptPubKey == spk1); require(tx.outputs[1].value == survivorShare);
+            require(tx.outputs[2].scriptPubKey == spk2); require(tx.outputs[2].value == survivorShare);
+            require(tx.outputs[3].scriptPubKey == spk4); require(tx.outputs[3].value == survivorShare);
+            require(tx.outputs[4].scriptPubKey == spk5); require(tx.outputs[4].value == survivorShare);
+            require(tx.outputs[5].scriptPubKey == houseSpk); require(tx.outputs[5].value == houseAmount);
+        } else if (d5) {
+            // victim 4: survivors 0,1,2,3,5
+            require(tx.outputs.length == 6);
+            require(tx.outputs[0].scriptPubKey == spk0); require(tx.outputs[0].value == survivorShare);
+            require(tx.outputs[1].scriptPubKey == spk1); require(tx.outputs[1].value == survivorShare);
+            require(tx.outputs[2].scriptPubKey == spk2); require(tx.outputs[2].value == survivorShare);
+            require(tx.outputs[3].scriptPubKey == spk3); require(tx.outputs[3].value == survivorShare);
+            require(tx.outputs[4].scriptPubKey == spk5); require(tx.outputs[4].value == survivorShare);
+            require(tx.outputs[5].scriptPubKey == houseSpk); require(tx.outputs[5].value == houseAmount);
+        } else {
+            // victim 5: survivors 0,1,2,3,4
+            require(tx.outputs.length == 6);
+            require(tx.outputs[0].scriptPubKey == spk0); require(tx.outputs[0].value == survivorShare);
+            require(tx.outputs[1].scriptPubKey == spk1); require(tx.outputs[1].value == survivorShare);
+            require(tx.outputs[2].scriptPubKey == spk2); require(tx.outputs[2].value == survivorShare);
+            require(tx.outputs[3].scriptPubKey == spk3); require(tx.outputs[3].value == survivorShare);
+            require(tx.outputs[4].scriptPubKey == spk4); require(tx.outputs[4].value == survivorShare);
+            require(tx.outputs[5].scriptPubKey == houseSpk); require(tx.outputs[5].value == houseAmount);
+        }
+    }
+}

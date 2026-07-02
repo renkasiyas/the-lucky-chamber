@@ -10,6 +10,10 @@ publish = false
 name = "smoke"
 path = "src/bin/smoke.rs"
 
+[[bin]]
+name = "resolve_diff"
+path = "src/bin/resolve_diff.rs"
+
 [dependencies]
 silverscript-lang = { path = "/Volumes/OdessaExt/Kasanova/research/KasBonds-research/vendor/silverscript/silverscript-lang" }
 kaspa-txscript = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript" }
@@ -19,14 +23,14 @@ kaspa-hashes = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypt
 kaspa-addresses = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/addresses" }
 blake2b_simd = "1"
 serde_json = "1"
+sha2 = "0.10"
 
-# Redirect silverscript-lang's tn12 git deps to LOCAL v2.0.1 (ground truth). Single txscript in the graph.
-[patch."https://github.com/kaspanet/rusty-kaspa"]
-kaspa-consensus-core = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/consensus/core" }
-kaspa-txscript = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript" }
-kaspa-txscript-errors = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript/errors" }
-kaspa-hashes = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/hashes" }
-kaspa-addresses = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/addresses" }
+# NOTE: we deliberately do NOT [patch] silverscript's tn12 deps to v2.0.1.
+# v2.0.1 `EngineFlags::default().covenants_enabled = false` (lib.rs:133) makes silverscript's
+# constant-baking (`ScriptBuilder::new()` + `add_data_with_push_opcode`) reject under v2.0.1.
+# So silverscript COMPILES with its native tn12 ScriptBuilder (codegen works), and we EXECUTE the
+# emitted opcode bytes on LOCAL v2.0.1 (our direct path deps below) — the compiled Vec<u8> is the
+# deployment artifact; no txscript types cross the boundary. Ground-truth execution stays on v2.0.1.
 
 [workspace]
 # Standalone workspace so this crate is not swept into any parent workspace.
