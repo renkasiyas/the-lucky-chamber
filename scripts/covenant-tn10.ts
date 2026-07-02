@@ -275,8 +275,16 @@ async function cmdSettle(
   log(`settle ${pathName}: input ${txid}:${vout} sigOpCount=${sigops} lockTime=${lockTime} outs=${outputs.length} ssLen=${path.scriptSigHex.length / 2}B`);
 
   const rpc = await connect();
-  const { daa } = await nodeInfo(rpc);
+  let { daa } = await nodeInfo(rpc);
   log('current virtual DAA:', daa.toString(), 'path lockTime:', lockTime.toString());
+  if (flags.wait !== undefined && lockTime > 0n) {
+    while (daa < lockTime) {
+      log(`  waiting for finality: DAA ${daa} < lockTime ${lockTime} (gap ${lockTime - daa})`);
+      await new Promise((r) => setTimeout(r, 5000));
+      daa = (await nodeInfo(rpc)).daa;
+    }
+    log('  lockTime reached: DAA', daa.toString(), '>=', lockTime.toString());
+  }
   try {
     const settleTxid = await submitV0(rpc, inputs, outputs, lockTime, { dry: flags.dry !== undefined });
     log('SETTLE result txid:', settleTxid);
