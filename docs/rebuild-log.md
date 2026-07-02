@@ -158,3 +158,35 @@ Guard = "delete only once its covenant replacement is IN and TESTED [in the runn
 
 ### #1 thing needing a human next
 **Get `Kasanova.signPskt` onto the Kasanova miniapp bridge** (contract fully specified in `signer.ts`): the launch signer for the ANYONECANPAY funding join. Everything downstream (wiring covenant funding+settlement into room-manager, then the §5 deletions, then the S3–S6 live-TN10 gates) blocks on a wallet that can sign an external input `SIGHASH_ALL|ANYONECANPAY` over a P2SH-output tx. S2 proved the Kasanova Dart PSKT stack CAN (0x81 capability); this is the integration ask, not a capability gap.
+
+---
+
+## 2026-07-02 — Session 3: LIVE TN10 broadcast (the covenant runs on a real node)
+
+Node: **Kasanova TN10 JSON-wRPC `wss://testnet.kasanova.io/ws`** (switched off the borsh endpoint for this work).
+
+### Step 0 — node health: HEALTHY + ON-FORK (`scripts/node-health.mjs`)
+getServerInfo/getBlockDagInfo at session start: `serverVersion=2.0.1` (exact ground-truth match), `networkId=testnet-10`, `isSynced=true`, `hasUtxoIndex=true`, `virtualDaaScore≈506,678,437` — ~39M DAA past TN10 Toccata activation (467,579,632). The pre-Toccata vendored WASM 1.0.1 negotiates JSON wRPC fine for reads/submits (rpcApiVersion 1).
+
+### Funds — AMPLE (`check-balance.mjs`)
+20/20 bots funded, all ≥4,600 KAS (~97,000 KAS total on TN10). No shortfall; no faucet needed. Bots derive from `WALLET_MNEMONIC` (backend/.env.local). (No ALICE/BOB in this repo — those live in kasanova_testing.)
+
+### ★ KEY CONSENSUS FINDINGS (v2.0.1 source, decide the whole broadcast strategy)
+- **Post-Toccata the 100k standard-mass cap is RELAXED to `None`** (`mining/src/mempool/check_transaction_standard.rs:43-46`): the only per-tx ceiling left is block-fit (compute block mass 500,000; transient block mass 1,000,000 → 250 KB byte cap via TRANSIENT_BYTE_TO_MASS_FACTOR=4). Our ~60 KB settle tx → transient ~242k, well under. **The 59 KB blob is relayable.**
+- **`covenants_enabled` is gated on DAA score, NOT tx version** (`consensus/src/processes/transaction_validator/tx_validation_in_utxo_context.rs:171`). So a **v0 transaction executes covenant opcodes** post-Toccata. This is decisive: the vendored WASM 1.0.1 only builds v0 (sigOpCount, no compute_budget) — and v0 covenant spends are valid. No Rust wRPC broadcaster needed.
+- **Script-execution budget**: covenants_enabled ⇒ a `RuntimeResourceMeter` caps script-unit consumption at the input's committed budget = `sig_op_count × 100,000` (v0) or `compute_budget × 10,000` (v1) script units (+9,999 free/input). `SCRIPT_UNITS_PER_GRAM=100`. The harness ran with `ScriptUnits(u64::MAX)`, so I instrumented it to report `vm.used_script_units()`: RESOLVE=124,904 / FORFEIT≈119-124k / REFUND=118,552 / **COOP=718,947** (6 checkSigs dominate). Max 718,947 ⇒ **v0 sig_op_count = 8 (≤255, FEASIBLE for every path)**.
+- **Min fee = 100 sompi/gram × mass** (node told us verbatim: "103327 fees under required 316500 for compute mass 3165" ⇒ 316500/3165 = 100). Matches spec §6. Baked settle `FEE` must exceed the ~60 KB tx's min (~6.9M sompi at mass ~68k); we bake 40,000,000 (0.4 KAS) with margin.
+
+### New tooling
+- `covenant-harness/src/bin/deploy_artifacts.rs` — parameterized (env LC_SEED/LC_STAKE/LC_FEE/LC_D1/LC_D2/LC_POT_CONFIG) emitter that reuses the PROVEN `combined_blob.rs` codegen, **re-executes each emitted path on the v2.0.1 VM** (accept + measured script-units), and writes byte-exact deploy artifacts (`backend/src/covenant/deploy_artifacts.fixture.json`): 59,099 B redeem, pot P2SH SPK, per-path scriptSig (incl. the 59 KB redeem push) + outputs + lockTime, coop key material, and the v0/v1 budget sizing.
+- `backend/src/covenant/direct-key-signer.ts` — **`DirectKeyPsktSigner implements PsktSigner`** (the KSNV-158 direct-key TEST signer): signs one funding input with a raw test key + **0x81** via kaspa-wasm `createInputSignature(SighashType.AllAnyOneCanPay)`; same seam as the KSNV-161 `MiniappBridgePsktSigner`, zero changes to the funding core (`pskt.ts`).
+- `scripts/covenant-tn10.ts` (tsx) — operational broadcaster against the Kasanova node: `node-health`, `fund-simple` (pay pot to the P2SH addr), `fund-join` (spec-§2 atomic 0x81 join via DirectKeyPsktSigner), `settle` (v0 covenant spend of a signature-free path), `wait-utxo`, `get-tx`.
+
+### ★ PROVEN ON TN10 — RESOLVE settles as the script forces (crux on-chain claim)
+- **Funding tx** `3a32d35d3308c7a47110b40760a12e64b6d63f7a0c16b352e851a8e9b0e2ae69` — created the pot UTXO (3 KAS) at P2SH `kaspatest:pqdm5rxx…w63p2xryp` (`aa201bba0cc6…87`), confirmed at vout 0, blockDaaScore 506,691,420.
+- **RESOLVE settle tx** `4d734453b1065d4b92e76a29a4462d80f3543906985b1ff929671d8997e3e582` — a **60,461-byte v0 covenant spend** carrying the full 59,099-byte redeem blob, **ZERO signatures** (secrets authorize), sigOpCount=2. **ACCEPTED** and confirmed (`is_accepted:true`). On-chain outputs **byte-match the reference oracle's RESOLVE table** (seed 7 ⇒ victim seat 3): survivors {0,1,2,4,5} each 49,400,000 sompi, house 20ffff…ac 13,000,000 sompi; fee = exactly the baked 40,000,000. Reference↔on-chain agreement on a live node.
+- Proves end-to-end on TN10: pot creation → signature-free settlement → script-forced payout == reference, with a v0 tx (vendored WASM), the 59 KB blob relayed and executed. This is the S4 RESOLVE leg and validates the whole approach for S3/S5.
+
+### Proven-vs-asserted ledger (session 3, live TN10)
+- **PROVEN (broadcast + confirmed, txid):** node health; funds; RESOLVE end-to-end (funding `3a32d35d…`, settle `4d734453…`) with outputs == oracle.
+- **IN PROGRESS:** S3 D1-boundary, S5 malleation, S6 indexing, FORFEIT-subset settle, D2 REFUND, COOP-ABORT (needs on-chain re-sign via sig-splice), spec-§2 fund-join broadcast.

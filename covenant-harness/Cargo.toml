@@ -26,6 +26,10 @@ path = "src/bin/combined_blob.rs"
 name = "oracle_vectors"
 path = "src/bin/oracle_vectors.rs"
 
+[[bin]]
+name = "deploy_artifacts"
+path = "src/bin/deploy_artifacts.rs"
+
 [dependencies]
 # Local patched fork (covenants_enabled builders) so the ONE combined 63-branch blob can be emitted.
 # Upstream KasBonds copy kept pristine. See vendor/silverscript-lang/Cargo.toml for the single-change rationale.
