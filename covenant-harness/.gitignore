@@ -1,2 +1,3 @@
 target/
+lc-harness-target/
 Cargo.lock

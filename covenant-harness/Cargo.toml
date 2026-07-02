@@ -18,8 +18,19 @@ path = "src/bin/resolve_diff.rs"
 name = "forfeit_diff"
 path = "src/bin/forfeit_diff.rs"
 
+[[bin]]
+name = "combined_blob"
+path = "src/bin/combined_blob.rs"
+
+[[bin]]
+name = "oracle_vectors"
+path = "src/bin/oracle_vectors.rs"
+
 [dependencies]
-silverscript-lang = { path = "/Volumes/OdessaExt/Kasanova/research/KasBonds-research/vendor/silverscript/silverscript-lang" }
+# Local patched fork (covenants_enabled builders) so the ONE combined 63-branch blob can be emitted.
+# Upstream KasBonds copy kept pristine. See vendor/silverscript-lang/Cargo.toml for the single-change rationale.
+silverscript-lang = { path = "vendor/silverscript-lang" }
+secp256k1 = { version = "0.29.0", features = ["global-context", "rand-std"] }
 kaspa-txscript = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript" }
 kaspa-txscript-errors = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript/errors" }
 kaspa-consensus-core = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/consensus/core" }
