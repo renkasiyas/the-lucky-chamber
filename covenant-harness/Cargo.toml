@@ -14,6 +14,10 @@ path = "src/bin/smoke.rs"
 name = "resolve_diff"
 path = "src/bin/resolve_diff.rs"
 
+[[bin]]
+name = "forfeit_diff"
+path = "src/bin/forfeit_diff.rs"
+
 [dependencies]
 silverscript-lang = { path = "/Volumes/OdessaExt/Kasanova/research/KasBonds-research/vendor/silverscript/silverscript-lang" }
 kaspa-txscript = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript" }
