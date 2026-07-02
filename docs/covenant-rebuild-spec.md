@@ -104,16 +104,14 @@ ENDIF
 
 Script-enforced `floor(pot × 5/100)` to `HOUSE_SPK` on RESOLVE and FORFEIT (plus forfeit slashes); **0% on COOP-ABORT and REFUND**. The house is never a signer and never receives change — the change-fallback-to-seat-0 bug class is gone. Zero-survivor semantics are fixed at design freeze and visible to every player before they sign.
 
-Fees (floor 100 sompi/gram; the `2×bytes` term dominates):
+Fees — **MEASURED on TN10 v2.0.1, session 3** (supersedes the earlier byte-estimate table, which undercounted 2–24×). The floor is **transient-mass-bound, not compute-bound**: `fee ≥ 100 sompi × transient_grams`, and `transient_grams = 4 × tx_bytes`. A settle that reveals the full 59 KB blob in its scriptSig therefore costs on the order of a tenth of a KAS, not a hundredth.
 
-| Tx | Size | Fee |
-|---|---|---|
-| Pot creation, N=6 | ~1.2 KB | ~0.003 KAS |
-| RESOLVE, N=6, R=6 | ~2.5–4 KB | ~0.005–0.01 KAS |
-| FORFEIT (63-branch, revealed in scriptSig) | ~12–25 KB | ~0.03–0.06 KAS |
-| COOP-ABORT / REFUND | ~2 KB | ~0.005 KAS |
+| Tx | Measured fee (TN10) |
+|---|---|
+| Pot creation (`fund-simple`) | ~0.003 KAS |
+| Settle revealing the 59 KB blob (RESOLVE / FORFEIT / COOP-ABORT / REFUND) | **≈ 0.122 KAS** (12.18M sompi) |
 
-≈ **0.01–0.06 KAS per game.** Price every game tx exactly at the fee floor: compute-budget is excluded from txid/sighash while block mass charges it, so exact-floor pricing makes budget-inflated malleated copies self-reject. Enforce buy-in ≥ ~0.3 KAS so every payout clears the 0.2 KAS KIP-9 minimum; each covenant UTXO carries +32 B storage accounting.
+≈ **0.12–0.13 KAS per game** dominated by the one blob-revealing settle. **The baked settle FEE constant MUST exceed the measured ~12.18M sompi** — a pot funded with too little baked fee is unspendable and strands (proven the hard way: pot `5333eedc…` stranded at FEE=6.8M). Price every game tx exactly at that transient-mass floor: compute-budget is excluded from txid/sighash while block mass charges it, so exact-floor pricing makes budget-inflated malleated copies self-reject (S5, confirmed on-chain). Enforce buy-in comfortably above the settle fee + the 0.2 KAS KIP-9 payout minimum; each covenant UTXO carries +32 B storage accounting.
 
 ---
 
