@@ -297,6 +297,72 @@ async function cmdSettle(
   }
 }
 
+async function cmdCoop(artifactPath: string, txid: string, vout: string, flags: Record<string, string>) {
+  const art = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+  const path = art.paths.find((p: any) => p.name === 'coop');
+  if (!path) throw new Error('coop path not in artifact');
+  const potSpk = art.potScriptPublicKey;
+  const pot = BigInt(art.params.pot);
+  const coopSeckeys: string[] = art.coopSeckeys;
+
+  // outputs = refund table
+  const outputs = path.outputs.map((o: any) => ({
+    value: BigInt(o.value),
+    scriptPublicKey: { version: o.version, script: o.scriptHex },
+  }));
+  // Build the coop tx with the pot input carrying its UTXO, so createInputSignature can hash SIG_HASH_ALL.
+  const potInput = {
+    previousOutpoint: { transactionId: txid, index: parseInt(vout) },
+    signatureScript: '',
+    sequence: 0n,
+    sigOpCount: 8,
+    utxo: {
+      address: addressFromScriptPublicKey({ version: potSpk.version, script: potSpk.scriptHex }, NETWORK).toString(),
+      outpoint: { transactionId: txid, index: parseInt(vout) },
+      amount: pot,
+      scriptPublicKey: { version: potSpk.version, script: potSpk.scriptHex },
+      blockDaaScore: 0n,
+      isCoinbase: false,
+    },
+  };
+  const { PrivateKey, SighashType, createInputSignature } = kaspa as any;
+  const signTx = new Transaction({
+    version: 0,
+    inputs: [potInput],
+    outputs,
+    lockTime: 0n,
+    subnetworkId: '0000000000000000000000000000000000000000',
+    gas: 0n,
+    payload: '',
+  });
+  // 6 schnorr sigs over the SAME input-0 sighash (SIG_HASH_ALL), one per baked coop key.
+  // createInputSignature returns the COMPLETE push already: 0x41 (OpData65) + 64B sig + 0x01 hashtype
+  // = 66 bytes, exactly matching the emitted suffix's 6x66-byte sig-prefix assumption.
+  let scriptSig = '';
+  for (let i = 0; i < coopSeckeys.length; i++) {
+    const push: string = createInputSignature(signTx, 0, new PrivateKey(coopSeckeys[i]), SighashType.All);
+    if (push.length !== 132) throw new Error(`unexpected coop sig push length ${push.length} (want 132 hex = 66B)`);
+    scriptSig += push;
+  }
+  scriptSig += path.selectorRedeemSuffixHex; // <selector 64><redeem push>
+
+  const inputs = [
+    { previousOutpoint: { transactionId: txid, index: parseInt(vout) }, signatureScript: scriptSig, sequence: 0n, sigOpCount: 8 },
+  ];
+  log(`coop: input ${txid}:${vout} sigs=${coopSeckeys.length} ssLen=${scriptSig.length / 2}B outs=${outputs.length}`);
+  const rpc = await connect();
+  try {
+    const settleTxid = await submitV0(rpc, inputs, outputs, 0n, { dry: flags.dry !== undefined });
+    log('COOP-ABORT result txid:', settleTxid);
+    await rpc.disconnect();
+    return settleTxid;
+  } catch (e: any) {
+    log('COOP REJECTED:', e?.message || e);
+    await rpc.disconnect();
+    throw e;
+  }
+}
+
 async function cmdGetTx(txid: string) {
   // REST is simplest for confirmed lookups
   const res = await fetch(`https://api-tn10.kaspa.org/transactions/${txid}?resolve_previous_outpoints=no`);
@@ -352,6 +418,9 @@ for (const r of rest) {
         break;
       case 'settle':
         await cmdSettle(positional[0], positional[1], positional[2], positional[3], flags);
+        break;
+      case 'coop':
+        await cmdCoop(positional[0], positional[1], positional[2], flags);
         break;
       case 'get-tx':
         await cmdGetTx(positional[0]);
