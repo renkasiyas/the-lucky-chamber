@@ -1,0 +1,32 @@
+# ABOUTME: Rust differential-test harness for the Lucky Chamber covenant redeem scripts.
+# ABOUTME: Compiles SilverScript via silverscript-lang, executes vs LOCAL rusty-kaspa v2.0.1 txscript VM (patched, ground truth).
+[package]
+name = "lucky-chamber-harness"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "smoke"
+path = "src/bin/smoke.rs"
+
+[dependencies]
+silverscript-lang = { path = "/Volumes/OdessaExt/Kasanova/research/KasBonds-research/vendor/silverscript/silverscript-lang" }
+kaspa-txscript = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript" }
+kaspa-txscript-errors = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript/errors" }
+kaspa-consensus-core = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/consensus/core" }
+kaspa-hashes = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/hashes" }
+kaspa-addresses = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/addresses" }
+blake2b_simd = "1"
+serde_json = "1"
+
+# Redirect silverscript-lang's tn12 git deps to LOCAL v2.0.1 (ground truth). Single txscript in the graph.
+[patch."https://github.com/kaspanet/rusty-kaspa"]
+kaspa-consensus-core = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/consensus/core" }
+kaspa-txscript = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript" }
+kaspa-txscript-errors = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/txscript/errors" }
+kaspa-hashes = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/hashes" }
+kaspa-addresses = { path = "/Volumes/OdessaExt/Kasanova/reference/rusty-kaspa/crypto/addresses" }
+
+[workspace]
+# Standalone workspace so this crate is not swept into any parent workspace.
