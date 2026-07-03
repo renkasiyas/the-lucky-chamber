@@ -282,7 +282,7 @@ struct Baked {
     house_spk: ScriptPublicKey,
     ctx: Vec<u8>,
 }
-fn ctor_args(server: &[u8], all: &[Vec<u8>], b: &Baked, d1: i64, d2: i64) -> Vec<Expr<'static>> {
+fn ctor_args(server: &[u8], all: &[Vec<u8>], b: &Baked, coop_pubkeys: &[Vec<u8>], d1: i64, d2: i64) -> Vec<Expr<'static>> {
     let mut a: Vec<Expr> = vec![sha256(server).into()];
     for s in all {
         a.push(sha256(s).into());
@@ -291,8 +291,8 @@ fn ctor_args(server: &[u8], all: &[Vec<u8>], b: &Baked, d1: i64, d2: i64) -> Vec
         a.push(spk_to_bytes(spk).into());
     }
     a.push(spk_to_bytes(&b.house_spk).into());
-    for i in 0..N {
-        a.push(coop_xonly(i).into());
+    for pk in coop_pubkeys {
+        a.push(pk.clone().into());
     }
     a.push(b.ctx.clone().into());
     a.push(d1.into());
@@ -345,33 +345,63 @@ fn main() {
     let out_path = std::env::var("LC_OUT")
         .unwrap_or_else(|_| "/Volumes/OdessaExt/Kasanova/games/the-lucky-chamber/backend/src/covenant/deploy_artifacts.fixture.json".into());
 
-    // baked payout / house SPKs: real bot P2PK from LC_POT_CONFIG, else deterministic fakes.
-    let (payout_spks, house_spk): (Vec<ScriptPublicKey>, ScriptPublicKey) = match std::env::var("LC_POT_CONFIG") {
-        Ok(path) => {
-            let cfg: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("read pot config")).unwrap();
-            let spks: Vec<ScriptPublicKey> = cfg["payoutSpks"]
-                .as_array()
-                .expect("payoutSpks array")
-                .iter()
-                .map(|h| ScriptPublicKey::new(0, from_hex(h.as_str().unwrap()).into()))
-                .collect();
-            assert_eq!(spks.len(), N, "need {N} payout SPKs");
-            let house = ScriptPublicKey::new(0, from_hex(cfg["houseSpk"].as_str().unwrap()).into());
-            (spks, house)
+    // Optional real-game config (LC_POT_CONFIG). All fields optional; absent => seed-derived test defaults.
+    //   payoutSpks:[hex;6], houseSpk:hex        real payout/treasury SPKs (script bytes only, version 0)
+    //   ctxHex:hex(32B)                          real RNG context (else 0x11*32)
+    //   serverSecretHex, seatSecretsHex:[hex;6]  real 192B secrets (else make_secret(seed,..))
+    //   coopPubkeysHex:[hex;6]                    real coop x-only pubkeys (else derived TEST keypairs)
+    let cfg: Option<serde_json::Value> = std::env::var("LC_POT_CONFIG")
+        .ok()
+        .map(|path| serde_json::from_str(&std::fs::read_to_string(&path).expect("read LC_POT_CONFIG")).expect("parse LC_POT_CONFIG"));
+    let cfg_arr = |key: &str| -> Option<Vec<Vec<u8>>> {
+        cfg.as_ref().and_then(|c| c[key].as_array()).map(|a| a.iter().map(|h| from_hex(h.as_str().unwrap())).collect())
+    };
+    let cfg_hex = |key: &str| -> Option<Vec<u8>> { cfg.as_ref().and_then(|c| c[key].as_str()).map(from_hex) };
+
+    // payout / house SPKs: real from config, else deterministic (unspendable) fakes.
+    let (payout_spks, house_spk): (Vec<ScriptPublicKey>, ScriptPublicKey) = match cfg_arr("payoutSpks") {
+        Some(spks) => {
+            assert_eq!(spks.len(), N, "need {N} payoutSpks");
+            let house = cfg_hex("houseSpk").expect("houseSpk required with payoutSpks");
+            (spks.into_iter().map(|s| ScriptPublicKey::new(0, s.into())).collect(), ScriptPublicKey::new(0, house.into()))
         }
-        Err(_) => (
+        None => (
             (0..N as u8).map(|i| ScriptPublicKey::new(0, default_payout_script(i).into())).collect(),
             ScriptPublicKey::new(0, default_payout_script(0xff).into()),
         ),
     };
-    let ctx = vec![0x11u8; 32];
+
+    // RNG context: real from config, else the 0x11*32 test default.
+    let ctx = cfg_hex("ctxHex").unwrap_or_else(|| vec![0x11u8; 32]);
+    assert_eq!(ctx.len(), 32, "ctx must be 32 bytes");
     let baked = Baked { payout_spks: payout_spks.clone(), house_spk: house_spk.clone(), ctx: ctx.clone() };
 
+    // secrets (server + 6 seats), 192B each: real from config, else make_secret(seed,..).
+    let server = cfg_hex("serverSecretHex").unwrap_or_else(|| make_secret(seed, 99));
+    let all: Vec<Vec<u8>> = match cfg_arr("seatSecretsHex") {
+        Some(v) => {
+            assert_eq!(v.len(), N, "need {N} seatSecretsHex");
+            v
+        }
+        None => (0..N as u8).map(|i| make_secret(seed, i)).collect(),
+    };
+    assert_eq!(server.len(), R * SHARD, "server secret must be {} bytes", R * SHARD);
+    for s in &all {
+        assert_eq!(s.len(), R * SHARD, "seat secret must be {} bytes", R * SHARD);
+    }
+
+    // coop keys: real x-only pubkeys (no seckeys — players sign off-harness) from config, else TEST keypairs.
+    let (coop_pubkeys, coop_seckeys): (Vec<Vec<u8>>, Option<Vec<[u8; 32]>>) = match cfg_arr("coopPubkeysHex") {
+        Some(pks) => {
+            assert_eq!(pks.len(), N, "need {N} coopPubkeysHex");
+            (pks, None)
+        }
+        None => ((0..N).map(coop_xonly).collect(), Some((0..N).map(coop_seckey).collect())),
+    };
+
     let source = gen_combined_source(&econ);
-    let server = make_secret(seed, 99);
-    let all: Vec<Vec<u8>> = (0..N as u8).map(|i| make_secret(seed, i)).collect();
     let compiled: CompiledContract =
-        compile_contract(&source, &ctor_args(&server, &all, &baked, d1, d2), CompileOptions::default()).expect("compile LuckyChamber");
+        compile_contract(&source, &ctor_args(&server, &all, &baked, &coop_pubkeys, d1, d2), CompileOptions::default()).expect("compile LuckyChamber");
     let blob = &compiled.script;
     let spk = pay_to_script_hash_script(blob);
     assert!(!compiled.without_selector, "must use selector dispatch");
@@ -474,28 +504,34 @@ fn main() {
         let suffix = ss[prefix_len..].to_vec(); // <selector 64><...>
         let mut full = suffix.clone();
         full.extend(push_redeem_script(blob));
-        // self-check the prefix assumption: rebuild and compare to a real coop exec
         let amt = econ.refund_amounts();
         let outputs: Vec<TransactionOutput> =
             (0..N).map(|i| TransactionOutput { value: amt[i] as u64, script_public_key: payout_spks[i].clone(), covenant: None }).collect();
-        let sigs = coop_sigs(blob, &outputs, pot_u);
-        let mut real_prefix = Vec::new();
-        for s in &sigs {
-            real_prefix.push(0x41u8);
-            real_prefix.extend_from_slice(s);
-        }
-        let mut real_ss = real_prefix.clone();
-        real_ss.extend(&full);
-        let ex = execute_and_measure(blob, real_ss, outputs, 0, pot_u);
-        eprintln!("  coop(self-check): accept={} units={} sigops={}", ex.result.is_ok(), ex.used_script_units, ex.used_sig_ops);
-        all_ok &= ex.result.is_ok();
+        // self-check ONLY when we hold the coop seckeys (test keys). With real player pubkeys the harness
+        // cannot sign, so we emit the suffix + outputs and the real players sign the real tx off-harness.
+        let (units, sigops, accepted) = if let Some(sk) = &coop_seckeys {
+            let sigs = coop_sigs(blob, &outputs, pot_u, sk);
+            let mut real_ss = Vec::new();
+            for s in &sigs {
+                real_ss.push(0x41u8);
+                real_ss.extend_from_slice(s);
+            }
+            real_ss.extend(&full);
+            let ex = execute_and_measure(blob, real_ss, outputs.clone(), 0, pot_u);
+            eprintln!("  coop(self-check): accept={} units={} sigops={}", ex.result.is_ok(), ex.used_script_units, ex.used_sig_ops);
+            all_ok &= ex.result.is_ok();
+            (ex.used_script_units, ex.used_sig_ops, serde_json::json!(ex.result.is_ok()))
+        } else {
+            eprintln!("  coop: real pubkeys supplied (no seckeys) -> suffix emitted, self-check skipped (players sign the real tx)");
+            (0u64, 0u16, serde_json::Value::Null)
+        };
         serde_json::json!({
             "name": "coop", "kind": "COOP-ABORT", "signatureFree": false, "cltvKind": serde_json::Value::Null,
             "lockTime": "0", "sequence": "0",
             "sigPushOpcode": "0x41",
             "selectorRedeemSuffixHex": to_hex(&full),
             "outputs": (0..N).map(|i| out_json(&payout_spks[i], econ.refund_amounts()[i])).collect::<Vec<_>>(),
-            "usedScriptUnits": ex.used_script_units, "usedSigOps": ex.used_sig_ops, "accepted": ex.result.is_ok(),
+            "usedScriptUnits": units, "usedSigOps": sigops, "accepted": accepted,
         })
     };
     paths.push(coop_suffix);
@@ -524,8 +560,8 @@ fn main() {
         "redeemScriptHex": to_hex(blob),
         "payoutSpks": payout_spks.iter().map(|s| to_hex(s.script())).collect::<Vec<_>>(),
         "houseSpkHex": to_hex(house_spk.script()),
-        "coopSeckeys": (0..N).map(|i| to_hex(&coop_seckey(i))).collect::<Vec<_>>(),
-        "coopPubkeys": (0..N).map(|i| to_hex(&coop_xonly(i))).collect::<Vec<_>>(),
+        "coopSeckeys": coop_seckeys.as_ref().map(|sk| sk.iter().map(|k| to_hex(k)).collect::<Vec<_>>()).unwrap_or_default(),
+        "coopPubkeys": coop_pubkeys.iter().map(|p| to_hex(p)).collect::<Vec<_>>(),
         "budget": {
             "maxUsedScriptUnits": max_units,
             "requiredV0SigOpCount": req_v0_sigops,
@@ -547,7 +583,7 @@ fn main() {
 }
 
 // ---- COOP schnorr sigs over calc_schnorr_signature_hash(tx,0,SIG_HASH_ALL) (VM self-check only) ----
-fn coop_sigs(redeem: &[u8], outputs: &[TransactionOutput], pot: u64) -> Vec<Vec<u8>> {
+fn coop_sigs(redeem: &[u8], outputs: &[TransactionOutput], pot: u64, seckeys: &[[u8; 32]]) -> Vec<Vec<u8>> {
     let spk = pay_to_script_hash_script(redeem);
     let input = TransactionInput::new(
         TransactionOutpoint { transaction_id: TransactionId::from_bytes([9u8; 32]), index: 0 },
@@ -561,9 +597,10 @@ fn coop_sigs(redeem: &[u8], outputs: &[TransactionOutput], pot: u64) -> Vec<Vec<
     let reused = SigHashReusedValuesUnsync::new();
     let sighash = calc_schnorr_signature_hash(&populated, 0, SIG_HASH_ALL, &reused);
     let msg = Message::from_digest(sighash.into());
-    (0..N)
-        .map(|seat| {
-            let kp = Keypair::from_seckey_slice(SECP256K1, &coop_seckey(seat)).expect("valid seckey");
+    seckeys
+        .iter()
+        .map(|sk| {
+            let kp = Keypair::from_seckey_slice(SECP256K1, sk).expect("valid seckey");
             let sig = kp.sign_schnorr(msg);
             let mut v = sig.as_ref().to_vec();
             v.push(SIG_HASH_ALL.to_u8());
