@@ -51,6 +51,21 @@ export function commit(secretHex: string): string {
   return crypto.createHash('sha256').update(Buffer.from(secretHex, 'hex')).digest('hex');
 }
 
+/**
+ * Derive the covenant ctx deterministically from the round's commitments (fairness: replaces a
+ * server-chosen random nonce, which the server could grind post-commit to bias the victim).
+ * ctx = SHA256( sortedConcat(seatCommits) || serverCommit ). Sorted => seat-order-independent; a
+ * function of the commits => once all commits are fixed (before any reveal) NO party can move ctx
+ * without breaking a commitment, and blind grinding of one's own secret yields no predictable edge.
+ */
+export function deriveCtx(seatCommitsHex: string[], serverCommitHex: string): string {
+  const sorted = [...seatCommitsHex].sort();
+  const h = crypto.createHash('sha256');
+  for (const c of sorted) h.update(Buffer.from(c, 'hex'));
+  h.update(Buffer.from(serverCommitHex, 'hex'));
+  return h.digest('hex');
+}
+
 /** Path to the prebuilt Rust emitter (override with LC_HARNESS_BIN; prod ships it in the image). */
 function harnessBin(): string {
   if (process.env.LC_HARNESS_BIN) return process.env.LC_HARNESS_BIN;
@@ -128,7 +143,8 @@ export function buildGame(
 ): BuiltGame {
   const serverSecretHex = secrets?.serverSecretHex ?? generateSecret();
   const seatSecretsHex = secrets?.seatSecretsHex ?? seats.map(() => generateSecret());
-  const roomNonceHex = crypto.randomBytes(32).toString('hex');
+  // ctx bound to all commitments (fairness — see deriveCtx). Deterministic + publicly reproducible.
+  const roomNonceHex = deriveCtx(seatSecretsHex.map((s) => commit(s)), commit(serverSecretHex));
   const config = buildPotConfig(seats, treasurySpkHex, serverSecretHex, seatSecretsHex, roomNonceHex);
   const artifact = emitArtifact(config, params);
   return { artifact, serverSecretHex, seatSecretsHex, roomNonceHex };

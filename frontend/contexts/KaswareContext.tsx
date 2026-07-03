@@ -25,6 +25,8 @@ interface KaswareContextValue {
   refreshBalance: (silent?: boolean) => Promise<void>
   signMessage: (message: string) => Promise<string>
   sendKaspa: (toAddress: string, amount: number) => Promise<string>
+  signPskt: (txJsonString: string, signInputs: Array<{ index: number; sighashType: number }>) => Promise<string>
+  getPublicKey: () => Promise<string>
   error: string | null
   showWalletModal: boolean
   closeWalletModal: () => void
@@ -199,6 +201,33 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
     [getKasware, connected]
   )
 
+  // Sign a PSKT (partially-signed Kaspa tx) — used by the covenant funding flow.
+  // Mirrors the signMessage/sendKaspa guard pattern. Returns the signed tx JSON string.
+  const signPskt = useCallback(
+    async (
+      txJsonString: string,
+      signInputs: Array<{ index: number; sighashType: number }>
+    ): Promise<string> => {
+      const kasware = getKasware()
+      if (!kasware || !connected) {
+        throw new Error('Wallet not connected')
+      }
+
+      return await kasware.signPskt({ txJsonString, options: { signInputs } })
+    },
+    [getKasware, connected]
+  )
+
+  // Fetch the connected account's public key (hex) — needed for covenant funding submit.
+  const getPublicKey = useCallback(async (): Promise<string> => {
+    const kasware = getKasware()
+    if (!kasware || !connected) {
+      throw new Error('Wallet not connected')
+    }
+
+    return await kasware.getPublicKey()
+  }, [getKasware, connected])
+
   // Refs for stable event handler references (prevents memory leaks from stale listeners)
   const connectedRef = useRef(connected)
   const disconnectRef = useRef(disconnect)
@@ -326,6 +355,8 @@ export function KaswareProvider({ children }: { children: ReactNode }) {
         refreshBalance,
         signMessage,
         sendKaspa,
+        signPskt,
+        getPublicKey,
         error,
         showWalletModal,
         closeWalletModal,

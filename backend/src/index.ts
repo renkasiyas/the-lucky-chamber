@@ -66,8 +66,14 @@ async function main() {
   // Wire deposit monitor to room manager for confirmations
   depositMonitor.setDepositConfirmer(roomManager)
 
-  // Start deposit monitor
-  depositMonitor.start()
+  // Start deposit monitor — custodial only. In covenant mode there are no per-seat deposits to watch;
+  // funding is the atomic ANYONECANPAY join driven by the covenant coordinator, so a confirmation here
+  // would prematurely lock the room.
+  if (config.covenantEnabled) {
+    logger.info('Covenant mode: custodial deposit monitor disabled (non-custodial join in effect)')
+  } else {
+    depositMonitor.start()
+  }
 
   // Initialize bot manager (only enabled on testnet with BOTS_ENABLED=true)
   const botManager = new BotManager(config.network, config.botsEnabled)
@@ -98,6 +104,15 @@ async function main() {
     if (addBots) {
       botManager.handleRoomCreated(roomId, playerAddresses).catch(err => {
         logger.error('Bot manager room created handler failed', { error: err?.message || String(err) })
+      })
+    }
+
+    // Covenant mode: a queue-matched room has its full roster at creation (players pre-seated, no
+    // per-seat joinRoom), so kick off the covenant funding coordinator here too. Idempotent; it waits
+    // for human seats to reveal + sign, and self-drives all-bot rooms.
+    if (config.covenantEnabled) {
+      roomManager.startCovenantFunding(roomId).catch(err => {
+        logger.error('startCovenantFunding (queue) failed', { roomId, error: err?.message || String(err) })
       })
     }
   })

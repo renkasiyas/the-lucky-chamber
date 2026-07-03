@@ -53,7 +53,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const resolvedParams = use(params)
   const roomId = resolvedParams.id
   const router = useRouter()
-  const { connected, initializing, address, sendKaspa, signMessage } = useKasware()
+  const { connected, initializing, address, sendKaspa, signMessage, signPskt, getPublicKey } = useKasware()
   const [room, setRoom] = useState<Room | null>(null)
   const [loading, setLoading] = useState(true)
   const [joining, setJoining] = useState(false)
@@ -76,6 +76,9 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const lockStartTimeRef = useRef<number | null>(null)
   const hasJoinedRef = useRef(false)
   const pendingVictoryRef = useRef(false) // True when waiting for death animation to complete
+  // Covenant funding guards (non-custodial deposit flow, gated by config.deposit.covenant)
+  const covenantStartedRef = useRef(false) // True once covenant:funding_start_request has been sent
+  const covenantSecretRef = useRef<string | null>(null) // 192-byte per-seat secret (hex) for submit + later verification
   const toast = useToast()
   const toastRef = useRef(toast)
   toastRef.current = toast
@@ -110,6 +113,16 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
   // Keep ref in sync
   fetchRoomRef.current = fetchRoom
+
+  // Covenant funding: ask the server to begin non-custodial funding for my seat.
+  // Reuses the existing depositSent/depositFailed waiting/failed UI. Idempotent via covenantStartedRef.
+  const startCovenantFunding = useCallback(() => {
+    if (!address || !ws.connected) return
+    covenantStartedRef.current = true
+    setDepositFailed(false)
+    setDepositSent(true)
+    ws.send('covenant:funding_start_request', { roomId, walletAddress: address })
+  }, [address, ws, roomId])
 
   useEffect(() => {
     if (!initializing && !connected) {
@@ -193,6 +206,89 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       }
     })
 
+    // --- Covenant (non-custodial) funding flow (config.deposit.covenant) ---
+    // Reset local "started" state so the user can retry after any covenant failure.
+    const resetCovenantForRetry = () => {
+      covenantStartedRef.current = false
+      setDepositSent(false)
+      setDepositFailed(true)
+    }
+
+    // Server begins covenant funding for my seat. Generate secret, fetch pubkey,
+    // prep an exact-value UTXO by self-sending perInput sompi, then reveal to the server.
+    const unsubCovFundingStart = ws.subscribe(
+      'covenant:funding_start',
+      (payload: { roomId: string; seatIndex: number; walletAddress: string; perInput: string }) => {
+        if (!address || payload.roomId !== roomId || payload.walletAddress !== address) return
+        const myAddress = address
+        void (async () => {
+          try {
+            // a. 192-byte secret, hex-encoded, kept in a ref for the submit (+ later verification).
+            const secretBytes = crypto.getRandomValues(new Uint8Array(192))
+            const secretHex = Array.from(secretBytes)
+              .map((b) => b.toString(16).padStart(2, '0'))
+              .join('')
+            covenantSecretRef.current = secretHex
+            // b. connected account public key.
+            const publicKeyHex = await getPublicKey()
+            // c. prep the exact-value UTXO by self-sending (server locates it by amount === perInput).
+            await sendKaspa(myAddress, Number(payload.perInput))
+            // d. reveal secret + pubkey.
+            ws.send('covenant:submit', { roomId, walletAddress: myAddress, secretHex, publicKeyHex })
+          } catch (err) {
+            resetCovenantForRetry()
+            const message = err instanceof Error ? err.message : 'Covenant funding failed'
+            toastRef.current.error(`Funding failed: ${message}`)
+          }
+        })()
+      }
+    )
+
+    // Server asks me to sign my join input (ANYONECANPAY, sighashType 129). Parse the scriptSig
+    // and return it. Enforces the same 0x81 hashtype the backend requires (see covenant-play.ts:149-158).
+    const unsubCovSign = ws.subscribe(
+      'covenant:sign',
+      (payload: {
+        roomId: string
+        seatIndex: number
+        walletAddress: string
+        txJsonString: string
+        inputIndex: number
+        sighashType: number
+      }) => {
+        if (!address || payload.roomId !== roomId || payload.walletAddress !== address) return
+        const myAddress = address
+        void (async () => {
+          try {
+            const signedJson = await signPskt(payload.txJsonString, [
+              { index: payload.inputIndex, sighashType: payload.sighashType },
+            ])
+            const scriptSigHex: string = JSON.parse(signedJson).inputs[payload.inputIndex].signatureScript
+            if (!scriptSigHex || scriptSigHex.slice(-2) !== '81') {
+              throw new Error(
+                `signed scriptSig hashtype is 0x${scriptSigHex ? scriptSigHex.slice(-2) : '??'}, expected 0x81 (SIGHASH_ALL|ANYONECANPAY)`
+              )
+            }
+            ws.send('covenant:sign_result', { roomId, walletAddress: myAddress, scriptSigHex })
+          } catch (err) {
+            resetCovenantForRetry()
+            const message = err instanceof Error ? err.message : 'Covenant signing failed'
+            toastRef.current.error(`Signing failed: ${message}`)
+          }
+        })()
+      }
+    )
+
+    // Server-side covenant error: show it and reset so the user can retry.
+    const unsubCovError = ws.subscribe(
+      'covenant:error',
+      (payload: { roomId: string; seatIndex: number; walletAddress: string; message: string }) => {
+        if (!address || payload.roomId !== roomId || payload.walletAddress !== address) return
+        resetCovenantForRetry()
+        toastRef.current.error(payload.message)
+      }
+    )
+
     return () => {
       unsubRoomUpdate()
       unsubGameStart()
@@ -203,8 +299,23 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       unsubTurnTimerStart()
       unsubPlayerForfeit()
       unsubPayoutSent()
+      unsubCovFundingStart()
+      unsubCovSign()
+      unsubCovError()
     }
-  }, [ws.connected, ws.subscribe, ws.send, roomId, address])
+  }, [ws.connected, ws.subscribe, ws.send, roomId, address, getPublicKey, sendKaspa, signPskt])
+
+  // Covenant funding auto-trigger: once seated + unconfirmed in a covenant FUNDING room, ask the
+  // server to begin funding exactly once (guarded by covenantStartedRef). This also covers
+  // queue-matched rooms where the player is pre-seated without ever pressing "ENTER CHAMBER".
+  useEffect(() => {
+    if (!config.deposit.covenant) return
+    if (!ws.connected || !address || !room) return
+    if (room.state !== 'FUNDING' || covenantStartedRef.current) return
+    const seat = room.seats.find((s) => s.walletAddress === address)
+    if (!seat || seat.confirmed) return
+    startCovenantFunding()
+  }, [ws.connected, address, room, startCovenantFunding])
 
   const joinRoom = async () => {
     if (!address || !room) return
@@ -264,6 +375,15 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
       const mySeat = updatedRoom.seats.find((s) => s.walletAddress === address)
       if (mySeat) {
+        // Covenant (non-custodial) mode: joining the room is enough — the seat is now reserved.
+        // Do NOT sendKaspa / submit_client_seed as a deposit; instead kick off the covenant
+        // funding flow (the funding_start_request → funding_start → submit → sign handshake).
+        if (config.deposit.covenant) {
+          toast.info('Seat reserved. Starting covenant funding...')
+          startCovenantFunding()
+          return
+        }
+
         // Sign message FIRST to confirm user intent before sending money
         toast.info('Please sign to confirm your entry...')
         const seedMessage = `${roomId}|${mySeat.index}|${address}`
@@ -353,6 +473,14 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     // Idempotency: prevent double deposit if already in-flight
     if (retryingDeposit) {
       toast.info('Deposit already in progress...')
+      return
+    }
+
+    // Covenant (non-custodial) mode: retry restarts the funding handshake instead of a custodial send.
+    if (config.deposit.covenant) {
+      toast.info('Restarting covenant funding...')
+      covenantStartedRef.current = false
+      startCovenantFunding()
       return
     }
 

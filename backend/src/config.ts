@@ -53,7 +53,21 @@ export const gameTimings = {
   pullTimeoutMs: getEnvNumber('PULL_TIMEOUT_MS', 30000), // 30 seconds
 }
 
-export const config: Config & { botsEnabled: boolean } = {
+// Covenant (non-custodial) custody params (KSNV-158). When covenantEnabled, the pot is held by an
+// L1 P2SH covenant instead of the server; settlement is a signature-free, script-forced tx. The
+// custodial path stays the default (flag off). Fee/D1/D2 are the baked covenant constants proven on
+// TN10: the settle FEE must exceed ~12.18M sompi transient-mass floor or the pot strands (see spec §6).
+export const covenant = {
+  enabled: getEnvBoolean('COVENANT_ENABLED', false),
+  feeSompi: BigInt(getEnvNumber('COVENANT_FEE_SOMPI', 13_000_000)), // baked settle fee (> ~12.18M floor)
+  fundFeeSompi: BigInt(getEnvNumber('COVENANT_FUND_FEE_SOMPI', 1_000_000)), // join-tx fee, split across N inputs
+  d1: getEnvNumber('COVENANT_D1', 1000), // FORFEIT deadline (DAA past lock)
+  d2: getEnvNumber('COVENANT_D2', 37000), // REFUND deadline (DAA past lock)
+  // Prebuilt Rust emitter shipped in the image; overrides game-service's relative fallback.
+  harnessBin: process.env.LC_HARNESS_BIN || '',
+}
+
+export const config: Config & { botsEnabled: boolean; covenantEnabled: boolean } = {
   network: getEnv('NETWORK', Network.TESTNET) as Network,
   rpcUrl: '', // Not used - Resolver auto-discovers nodes
   walletMnemonic: getEnv('WALLET_MNEMONIC'),
@@ -61,6 +75,7 @@ export const config: Config & { botsEnabled: boolean } = {
   houseCutPercent: getEnvNumber('HOUSE_CUT_PERCENT', 5),
   port: getEnvNumber('PORT', 4201),
   botsEnabled: getEnvBoolean('BOTS_ENABLED', false),
+  covenantEnabled: covenant.enabled,
 }
 
 // Validation

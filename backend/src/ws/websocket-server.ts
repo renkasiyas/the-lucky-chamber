@@ -228,6 +228,18 @@ export class WSServer {
           this.handleSubscribeRoom(ws, payload as { roomId: string; walletAddress: string })
           break
 
+        case 'covenant:funding_start_request':
+          this.handleCovenantFundingRequest(ws, payload as { roomId: string; walletAddress: string })
+          break
+
+        case 'covenant:submit':
+          this.handleCovenantSubmit(ws, payload as { roomId: string; walletAddress: string; secretHex: string; publicKeyHex: string })
+          break
+
+        case 'covenant:sign_result':
+          this.handleCovenantSignResult(ws, payload as { roomId: string; walletAddress: string; scriptSigHex: string })
+          break
+
         default:
           this.sendError(ws, `Unknown event: ${event}`)
       }
@@ -397,6 +409,60 @@ export class WSServer {
     roomManager.submitClientSeed(roomId, client.walletAddress, clientSeed)
 
     this.broadcastRoomUpdate(roomId)
+  }
+
+  // ─────────────────────────── Covenant (non-custodial) funding handlers ───────────────────────────
+
+  private handleCovenantFundingRequest(ws: WebSocket, payload: { roomId: string; walletAddress: string }): void {
+    const client = this.clients.get(ws)
+    if (!client) return
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+    roomManager.requestCovenantFunding(payload.roomId, client.walletAddress).catch((err: any) => {
+      this.sendError(ws, err?.message || 'covenant funding request failed')
+    })
+  }
+
+  private handleCovenantSubmit(
+    ws: WebSocket,
+    payload: { roomId: string; walletAddress: string; secretHex: string; publicKeyHex: string }
+  ): void {
+    const client = this.clients.get(ws)
+    if (!client) return
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+    const { roomId, secretHex, publicKeyHex } = payload
+    if (!secretHex || !publicKeyHex) {
+      this.sendError(ws, 'covenant submit requires secretHex and publicKeyHex')
+      return
+    }
+    roomManager.handleCovenantSubmit(roomId, client.walletAddress, secretHex, publicKeyHex).catch((err: any) => {
+      this.sendError(ws, err?.message || 'covenant submit failed')
+    })
+  }
+
+  private handleCovenantSignResult(
+    ws: WebSocket,
+    payload: { roomId: string; walletAddress: string; scriptSigHex: string }
+  ): void {
+    const client = this.clients.get(ws)
+    if (!client) return
+    if (!client.walletAddress) {
+      this.sendError(ws, 'Not authenticated - join a room first')
+      return
+    }
+    const { roomId, scriptSigHex } = payload
+    if (!scriptSigHex) {
+      this.sendError(ws, 'covenant sign result requires scriptSigHex')
+      return
+    }
+    roomManager.handleCovenantSignResult(roomId, client.walletAddress, scriptSigHex).catch((err: any) => {
+      this.sendError(ws, err?.message || 'covenant sign result failed')
+    })
   }
 
   private handleReadyForTurn(ws: WebSocket, payload: ReadyForTurnPayload): void {

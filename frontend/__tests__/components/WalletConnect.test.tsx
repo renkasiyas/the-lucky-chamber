@@ -27,6 +27,8 @@ describe('WalletConnect', () => {
     refreshBalance: vi.fn(),
     signMessage: vi.fn(),
     sendKaspa: vi.fn(),
+    signPskt: vi.fn(),
+    getPublicKey: vi.fn(),
     error: null,
     network: null,
     expectedNetwork: 'mainnet',

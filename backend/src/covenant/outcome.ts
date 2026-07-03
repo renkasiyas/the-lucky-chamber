@@ -22,7 +22,9 @@ import { sha256 } from '@noble/hashes/sha256';
 
 export const SHARD_BYTES = 32;
 export const CHAMBERS = 6; // 6-chamber cylinder, 1 bullet, no re-spin
-export const CTX_BYTES = 32; // covenant_ctx = funding pot outpoint txid (read on-chain via OpOutpointTxId)
+export const CTX_BYTES = 32; // covenant_ctx: a 32-byte constant BAKED into the redeem script at deploy
+// (deploy_artifacts.rs bakes it as a ctor arg — it is NOT read on-chain from the outpoint). In the
+// commit-reveal build (game-service.deriveCtx) ctx = SHA256(sorted(seatCommits) || serverCommit).
 
 export interface RoomParams {
   /** number of player seats (<= 6 this build) */
@@ -35,7 +37,7 @@ export interface RoomParams {
   houseBps: number;
   /** exact baked fee for the settle tx (sompi) — every game tx priced at the fee floor (spec §6/§8) */
   feeFloor: bigint;
-  /** 32-byte domain separator (funding pot outpoint txid) */
+  /** 32-byte domain separator baked into the redeem script (deriveCtx = SHA256(sorted seatCommits || serverCommit)) */
   covenantCtx: Uint8Array;
 }
 

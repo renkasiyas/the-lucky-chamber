@@ -9,6 +9,7 @@ export interface KaswareWallet {
   getPublicKey: () => Promise<string>
   getBalance: () => Promise<{ total: string; confirmed: string; unconfirmed: string }>
   sendKaspa: (toAddress: string, amount: number) => Promise<string>
+  signPskt: (args: { txJsonString: string; options: { signInputs: Array<{ index: number; sighashType: number }> } }) => Promise<string>
   signMessage: (message: string, type?: 'ecdsa' | 'schnorr') => Promise<string>
   on: (event: string, handler: (...args: any[]) => void) => void
   removeListener: (event: string, handler: (...args: any[]) => void) => void

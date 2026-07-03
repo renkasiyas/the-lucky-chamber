@@ -21,6 +21,7 @@ const createMockWallet = (): KaswareWallet => ({
   })),
   signMessage: vi.fn(async () => 'mock-signature'),
   sendKaspa: vi.fn(async () => 'mock-tx-id'),
+  signPskt: vi.fn(async () => 'mock-signed-tx-json'),
   on: vi.fn(),
   removeListener: vi.fn(),
 })

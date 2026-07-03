@@ -338,6 +338,18 @@ class KaspaClient {
   }
 
   /**
+   * Raw kaspa-wasm RpcClient for callers that need the lower-level API (e.g. the covenant
+   * orchestrator's manual v0 tx submission `submitTransaction({transaction, allowOrphan:false})`,
+   * which mirrors the TN10-proven covenant scripts). Returns the shared, keep-alive'd connection.
+   */
+  getRpcClient(): any {
+    if (!rpcClient) {
+      throw new Error('Kaspa client not initialized')
+    }
+    return rpcClient
+  }
+
+  /**
    * Check if client is connected (uses rpcClient.isConnected for real-time status)
    */
   isConnected(): boolean {

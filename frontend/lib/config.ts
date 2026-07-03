@@ -13,6 +13,13 @@ export const config = {
     baseUrl: process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:4201',
   },
 
+  // Deposit mode configuration
+  // When covenant is true, deposits fund an L1 P2SH pot (non-custodial) instead
+  // of the per-seat custodial deposit address. Defaults to false (custodial).
+  deposit: {
+    covenant: process.env.NEXT_PUBLIC_COVENANT_DEPOSITS === 'true',
+  },
+
   // Wallet polling intervals
   wallet: {
     balanceRefreshInterval: 10000, // 10 seconds

@@ -47,3 +47,4 @@ coverage/
 *.md
 !README.md
 docs/
+covenant-harness/bin-linux/

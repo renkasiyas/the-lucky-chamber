@@ -50,6 +50,8 @@ describe('Header', () => {
     refreshBalance: mockRefreshBalance,
     signMessage: vi.fn(),
     sendKaspa: vi.fn(),
+    signPskt: vi.fn(),
+    getPublicKey: vi.fn(),
     error: null,
     network: null,
     expectedNetwork: 'mainnet',

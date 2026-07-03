@@ -23,6 +23,8 @@ import { RNGSystem } from '../crypto/rng.js'
 import { kaspaClient } from '../crypto/kaspa-client.js'
 import { knsClient } from '../crypto/kns-client.js'
 import { config, gameTimings } from '../config.js'
+import { covenantOrchestrator } from '../covenant/orchestrator.js'
+import { commit as covenantCommit } from '../covenant/game-service.js'
 import type { WSServer } from '../ws/websocket-server.js'
 import { logger, logRoomEvent, logUserAction } from '../utils/logger.js'
 
@@ -64,6 +66,8 @@ export class RoomManager {
   private pendingPayouts: Map<string, PendingPayoutState> = new Map() // roomId -> pending payout state
   private depositLocks: Set<string> = new Set() // roomId:seatIndex -> prevents concurrent confirmDeposit
   private refundInProgress: Set<string> = new Set() // roomId -> prevents concurrent refund attempts
+  private covenantFundingStarted: Set<string> = new Set() // roomId -> covenant funding coordinator kicked off
+  private covenantJoinBroadcast: Set<string> = new Set() // roomId -> covenant join tx broadcast (guards double-send)
 
   /**
    * Set callback for when a room is completed (settled or aborted)
@@ -332,6 +336,17 @@ export class RoomManager {
     // Fetch KNS profile asynchronously (don't block join)
     this.fetchKnsProfile(roomId, seatIndex, walletAddress)
 
+    // Covenant mode: once the roster is full, kick off the non-custodial funding coordinator
+    // (emit artifact -> prep -> assemble join -> sign -> broadcast). Idempotent; no-op in custodial mode.
+    if (config.covenantEnabled) {
+      const filled = store.getRoom(roomId)
+      if (filled && filled.seats.length === filled.maxPlayers) {
+        this.startCovenantFunding(roomId).catch((err) =>
+          logger.error('startCovenantFunding failed', { roomId, error: err?.message || String(err) })
+        )
+      }
+    }
+
     // Each player deposits to their unique seat address
     return { seat, depositAddress }
   }
@@ -515,6 +530,200 @@ export class RoomManager {
     seat.clientSeed = clientSeed
     store.updateSeat(roomId, seat.index, seat)
     logRoomEvent('Client seed submitted', roomId, { seatIndex: seat.index, walletAddress })
+  }
+
+  // ─────────────────────────────── Covenant (non-custodial) funding ───────────────────────────────
+  // Replaces per-seat custodial deposits with a single atomic ANYONECANPAY join into an L1 P2SH pot.
+  // Until the join tx broadcasts, no money has moved — so an aborted pre-join room needs no refunds.
+  // Bots sign server-side (fund_sign); humans sign in-browser (Kasware signPskt 0x81) via WS round-trip.
+
+  private isBotSeat(walletAddress: string | null): boolean {
+    if (!walletAddress) return false
+    const botManager = (global as any).botManager
+    return botManager?.isBot?.(walletAddress) ?? false
+  }
+
+  /** Kicked off once the roster is full. Registers bots, preps their exact-value UTXOs, and asks any
+   *  human seats to reveal + prep + sign. Idempotent per room. */
+  async startCovenantFunding(roomId: string): Promise<void> {
+    if (!config.covenantEnabled) return
+    if (this.covenantFundingStarted.has(roomId)) return
+    const room = store.getRoom(roomId)
+    if (!room || room.state !== RoomState.FUNDING) return
+    if (room.seats.length !== room.maxPlayers) return
+    this.covenantFundingStarted.add(roomId)
+    logRoomEvent('Covenant funding started', roomId, { seats: room.seats.length, seatPrice: room.seatPrice })
+
+    const botManager = (global as any).botManager
+    const stakeSompi = BigInt(Math.floor(room.seatPrice * SOMPI_PER_KAS))
+    covenantOrchestrator.initGame(roomId, stakeSompi)
+
+    // Register bot seats (server holds their 192B secrets + signing keys). Humans register at submit.
+    const humanSeats: Seat[] = []
+    const botSeats: Seat[] = []
+    for (const seat of room.seats) {
+      if (!seat.walletAddress) continue
+      if (this.isBotSeat(seat.walletAddress)) {
+        const botId = botManager?.getBotId?.(seat.walletAddress)
+        if (!botId) throw new Error(`no botId for ${seat.walletAddress}`)
+        await covenantOrchestrator.addBotSeat(roomId, seat.index, botId)
+        botSeats.push(seat)
+      } else {
+        humanSeats.push(seat)
+      }
+    }
+
+    // Prep each bot's exact-value UTXO (self-send split), then ask humans to fund.
+    await Promise.all(botSeats.map((s) => covenantOrchestrator.prepBotUtxo(roomId, s.index)))
+    const cov = covenantOrchestrator.get(roomId)!
+    for (const seat of humanSeats) {
+      this.wsServer?.broadcastToRoom(roomId, 'covenant:funding_start', {
+        roomId,
+        seatIndex: seat.index,
+        walletAddress: seat.walletAddress,
+        perInput: cov.perInput.toString(),
+      })
+    }
+
+    // Give bot prep UTXOs time to be accepted, then advance (covers the all-bot case; human submits
+    // will also drive advance as they arrive).
+    setTimeout(() => {
+      this.advanceCovenantFunding(roomId).catch((err) =>
+        logger.error('advanceCovenantFunding (post-prep) failed', { roomId, error: err?.message || String(err) })
+      )
+    }, 14000)
+  }
+
+  /** A human revealed their secret + prepped their UTXO. Register + reveal, locate the prepped UTXO, advance. */
+  async handleCovenantSubmit(
+    roomId: string,
+    walletAddress: string,
+    secretHex: string,
+    publicKeyHex: string
+  ): Promise<void> {
+    const room = store.getRoom(roomId)
+    if (!room) throw new Error('Room not found')
+    const seat = room.seats.find((s) => s.walletAddress === walletAddress)
+    if (!seat) throw new Error('Seat not found for wallet')
+
+    await covenantOrchestrator.addHumanSeat(roomId, seat.index, walletAddress, publicKeyHex, covenantCommit(secretHex))
+    covenantOrchestrator.revealHumanSecret(roomId, seat.index, secretHex)
+
+    // The client prepped an exact-value UTXO just before submitting; find it (retry — it may not be
+    // queryable immediately after broadcast).
+    let found = false
+    for (let i = 0; i < 10 && !found; i++) {
+      found = await covenantOrchestrator.findHumanPreppedUtxo(roomId, seat.index)
+      if (!found) await new Promise((r) => setTimeout(r, 3000))
+    }
+    if (!found) {
+      this.wsServer?.broadcastToRoom(roomId, 'covenant:error', {
+        roomId,
+        seatIndex: seat.index,
+        walletAddress,
+        message: 'prepped funding UTXO not found — try again',
+      })
+      return
+    }
+    await this.advanceCovenantFunding(roomId)
+  }
+
+  /** Client asks to begin covenant funding for its seat (pull-based, robust to the funding_start race
+   *  on queue-matched rooms). Ensures the coordinator is running, then replies with the per-seat funding
+   *  amount so the client can prep an exact-value UTXO and reveal + sign. */
+  async requestCovenantFunding(roomId: string, walletAddress: string): Promise<void> {
+    await this.startCovenantFunding(roomId)
+    const cov = covenantOrchestrator.get(roomId)
+    const room = store.getRoom(roomId)
+    const seat = room?.seats.find((s) => s.walletAddress === walletAddress)
+    if (cov && seat && !this.isBotSeat(walletAddress)) {
+      this.wsServer?.broadcastToRoom(roomId, 'covenant:funding_start', {
+        roomId,
+        seatIndex: seat.index,
+        walletAddress,
+        perInput: cov.perInput.toString(),
+      })
+    }
+  }
+
+  /** A human returned their 0x81-signed join input. Record it and advance. */
+  async handleCovenantSignResult(roomId: string, walletAddress: string, scriptSigHex: string): Promise<void> {
+    const room = store.getRoom(roomId)
+    if (!room) throw new Error('Room not found')
+    const seat = room.seats.find((s) => s.walletAddress === walletAddress)
+    if (!seat) throw new Error('Seat not found for wallet')
+    covenantOrchestrator.submitHumanSignedInput(roomId, seat.index, scriptSigHex)
+    await this.advanceCovenantFunding(roomId)
+  }
+
+  /** State driver for covenant funding: emit -> assemble -> sign -> broadcast join -> lock. Idempotent;
+   *  returns early (waits) whenever a precondition isn't met yet. */
+  private async advanceCovenantFunding(roomId: string): Promise<void> {
+    if (this.covenantJoinBroadcast.has(roomId)) return
+    const room = store.getRoom(roomId)
+    if (!room || room.state !== RoomState.FUNDING) return
+    const cov = covenantOrchestrator.get(roomId)
+    if (!cov) return
+
+    // 1. every seat registered with a secret (bots always; humans after reveal)
+    if (!covenantOrchestrator.readyToEmit(roomId)) return
+
+    // 2. every human seat's prepped UTXO located (bots prepped in startCovenantFunding)
+    for (const cseat of cov.seats) {
+      if (!cseat.isBot && !cseat.prepped) {
+        const ok = await covenantOrchestrator.findHumanPreppedUtxo(roomId, cseat.seatIndex)
+        if (!ok) return
+      }
+    }
+    if (cov.seats.some((s) => !s.prepped)) return
+
+    // 3. emit the artifact + assemble the join; ask humans to sign
+    if (!cov.artifact) {
+      await covenantOrchestrator.prepareAndEmit(roomId)
+      const { txJsonString, humanSeatIndexes } = await covenantOrchestrator.assembleJoinForSigning(roomId)
+      for (const si of humanSeatIndexes) {
+        const seat = room.seats.find((s) => s.index === si)
+        this.wsServer?.broadcastToRoom(roomId, 'covenant:sign', {
+          roomId,
+          seatIndex: si,
+          walletAddress: seat?.walletAddress,
+          txJsonString,
+          inputIndex: si,
+          sighashType: 129,
+        })
+      }
+      if (humanSeatIndexes.length > 0) return // wait for sign results
+    }
+
+    // 4. all inputs signed (bots via fund_sign now; humans already returned theirs)
+    if (cov.seats.some((s) => s.isBot && !s.signedScriptSigHex)) {
+      covenantOrchestrator.signBotInputs(roomId)
+    }
+    if (cov.seats.some((s) => !s.signedScriptSigHex)) return
+
+    // 5. broadcast the atomic join; on success mark all seats confirmed and lock
+    this.covenantJoinBroadcast.add(roomId)
+    try {
+      const joinTxid = await covenantOrchestrator.broadcastJoin(roomId)
+      logRoomEvent('Covenant join broadcast', roomId, { joinTxid, potAddress: cov.potAddress })
+      for (const seat of room.seats) {
+        store.updateSeat(roomId, seat.index, {
+          confirmed: true,
+          confirmedAt: Date.now(),
+          depositTxId: joinTxid,
+          amount: room.seatPrice,
+        })
+      }
+      const updated = store.getRoom(roomId)
+      if (updated && this.wsServer) {
+        this.wsServer.broadcastToRoom(roomId, WSEvent.ROOM_UPDATE, { room: updated })
+      }
+      this.checkAndLockRoom(roomId)
+    } catch (err: any) {
+      this.covenantJoinBroadcast.delete(roomId)
+      logger.error('Covenant join broadcast failed', { roomId, error: err?.message || String(err) })
+      await this.abortRoom(roomId)
+    }
   }
 
   /**
@@ -868,9 +1077,16 @@ export class RoomManager {
         blockHash,
       })
 
-      // Check if this chamber has a bullet
+      // Check if this chamber has a bullet.
+      // Covenant mode: the outcome is BAKED into the L1 artifact at emit (from the sealed secrets), so
+      // the on-chain RESOLVE settle pays a fixed victim. The played-out death MUST equal that victim or
+      // the UI would contradict the chain — so override the RNG death with the baked victim seat.
       const chamberIndex = roundIndex % chambers.length
-      const died = chambers[chamberIndex]
+      let died = chambers[chamberIndex]
+      if (config.covenantEnabled) {
+        const victimSeat = covenantOrchestrator.victimSeatIndex(roomId)
+        died = victimSeat !== undefined && shooterSeatIndex === victimSeat
+      }
 
       if (died) {
         // Mark shooter as dead and persist to store
@@ -997,8 +1213,17 @@ export class RoomManager {
       return
     }
 
-    // Integer division for payout per survivor (in sompi)
-    const payoutPerSurvivorSompi = Math.floor(payoutAmountSompi / survivors.length)
+    // Integer division for payout per survivor (in sompi).
+    // Covenant mode: the ACTUAL survivor amount is script-forced in the L1 artifact (pot minus the baked
+    // settle fee, then house cut) — read it so the UI matches the chain rather than the custodial formula.
+    let payoutPerSurvivorSompi = Math.floor(payoutAmountSompi / survivors.length)
+    if (config.covenantEnabled) {
+      try {
+        payoutPerSurvivorSompi = Number(covenantOrchestrator.resolvePerSurvivorSompi(roomId))
+      } catch (err: any) {
+        logger.warn('covenant resolve payout lookup failed, using custodial estimate', { roomId, error: err?.message })
+      }
+    }
     // Convert back to KAS for storage (Payout.amount is in KAS)
     const payoutPerSurvivor = payoutPerSurvivorSompi / SOMPI_PER_KAS
 
@@ -1090,18 +1315,38 @@ export class RoomManager {
       confirmedClients: Array.from(pendingPayout.confirmedClients)
     })
 
-    // Now send actual payout transaction
+    // Now send actual payout transaction.
+    // Covenant mode: broadcast the signature-free RESOLVE settle — the pot P2SH pays survivors + house
+    // with script-forced outputs; the server never signs a payout (no custodial risk, no payout_failed
+    // from an under-funded hot wallet).
     let payoutTxId = 'payout_failed'
-    try {
-      const { payoutService } = await import('../crypto/services/payout-service.js')
-      payoutTxId = await payoutService.sendPayout(roomId)
-      logRoomEvent('Payout transaction sent', roomId, { txId: payoutTxId })
-    } catch (error: any) {
-      logger.error('Failed to send payout transaction', {
-        roomId,
-        error: error?.message || String(error),
-        stack: error?.stack
-      })
+    if (config.covenantEnabled) {
+      try {
+        payoutTxId = await covenantOrchestrator.broadcastSettle(roomId)
+        logRoomEvent('Covenant settle (RESOLVE) broadcast', roomId, { txId: payoutTxId })
+      } catch (error: any) {
+        logger.error('Failed to broadcast covenant settle', {
+          roomId,
+          error: error?.message || String(error),
+          stack: error?.stack,
+        })
+      } finally {
+        covenantOrchestrator.cleanup(roomId)
+        this.covenantFundingStarted.delete(roomId)
+        this.covenantJoinBroadcast.delete(roomId)
+      }
+    } else {
+      try {
+        const { payoutService } = await import('../crypto/services/payout-service.js')
+        payoutTxId = await payoutService.sendPayout(roomId)
+        logRoomEvent('Payout transaction sent', roomId, { txId: payoutTxId })
+      } catch (error: any) {
+        logger.error('Failed to send payout transaction', {
+          roomId,
+          error: error?.message || String(error),
+          stack: error?.stack
+        })
+      }
     }
 
     // Update room with actual payout txId
@@ -1151,7 +1396,26 @@ export class RoomManager {
 
     logRoomEvent('Room aborted, processing refunds', roomId)
 
-    // Send refund transactions to all confirmed deposits
+    // Covenant mode: the atomic ANYONECANPAY join means no money moves until the join tx broadcasts.
+    // A pre-join abort (the common case: a seat drops during funding) therefore needs no refund — each
+    // player still owns their prepped UTXO. If the join already broadcast, the funded pot is redeemable
+    // only via the covenant COOP/D2 refund paths (not a server-signed refund), tracked as a follow-up.
+    if (config.covenantEnabled) {
+      const joinBroadcast = this.covenantJoinBroadcast.has(roomId)
+      covenantOrchestrator.cleanup(roomId)
+      this.covenantFundingStarted.delete(roomId)
+      this.covenantJoinBroadcast.delete(roomId)
+      store.updateRoom(roomId, { refundTxIds: [] })
+      if (joinBroadcast) {
+        logger.warn('Covenant room aborted AFTER join broadcast — pot funded; needs COOP/D2 refund', { roomId })
+      } else {
+        logRoomEvent('Covenant room aborted pre-join — no money moved, no refund needed', roomId)
+      }
+      if (this.onRoomCompleted) this.onRoomCompleted(roomId)
+      return
+    }
+
+    // Send refund transactions to all confirmed deposits (custodial)
     this.refundInProgress.add(roomId)
     try {
       const { payoutService } = await import('../crypto/services/payout-service.js')
@@ -1305,6 +1569,9 @@ export class RoomManager {
     for (const room of rooms) {
       if (room.state !== RoomState.ABORTED) continue
       if (this.refundInProgress.has(room.id)) continue
+      // Covenant rooms never hold custodial deposits — nothing for the payout-service to refund. The
+      // atomic join means pre-join aborts moved no money; a funded pot uses COOP/D2 covenant refunds.
+      if (config.covenantEnabled) continue
 
       // Check seats with wallet addresses — even if not confirmed, on-chain UTXOs may exist
       // (deposit monitor may have missed confirmation due to RPC disconnect)

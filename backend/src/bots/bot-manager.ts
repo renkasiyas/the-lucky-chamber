@@ -63,6 +63,14 @@ export class BotManager {
   }
 
   /**
+   * Map a bot's wallet address back to its bot id (for the covenant orchestrator's key derivation).
+   */
+  getBotId(address: string): string | null {
+    const i = this.botAddresses.indexOf(address)
+    return i >= 0 ? BOT_IDS[i] : null
+  }
+
+  /**
    * Get all bot addresses
    */
   getBotAddresses(): string[] {
@@ -169,6 +177,13 @@ export class BotManager {
    */
   private async sendBotDeposits(roomId: string): Promise<void> {
     if (!this.enabled) return
+
+    // Covenant mode: bots do NOT make custodial deposits. The room-manager covenant coordinator holds
+    // each bot's key, preps its exact-value UTXO, and signs its ANYONECANPAY join input. Skip entirely.
+    if (config.covenantEnabled) {
+      logger.info('Covenant mode: skipping custodial bot deposits (covenant coordinator funds bots)', { roomId })
+      return
+    }
 
     const botSeatIndices = this.botSeats.get(roomId)
     if (!botSeatIndices) {
