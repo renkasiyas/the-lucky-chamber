@@ -231,7 +231,7 @@ export class BotManager {
     }
 
     const amountSompi = BigInt(Math.floor(amountKAS * 100_000_000))
-    const feeSompi = 10000n // 0.0001 KAS fee
+    const feeSompi = 3_000_000n // 0.03 KAS — post-Toccata tn10 requires 100 sompi/gram (was 10000n, ~100x too low)
 
     if (totalAmount < amountSompi + feeSompi) {
       throw new Error(`Insufficient funds for bot ${botId}: have ${totalAmount}, need ${amountSompi + feeSompi}`)

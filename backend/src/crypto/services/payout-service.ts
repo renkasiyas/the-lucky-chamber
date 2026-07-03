@@ -129,7 +129,7 @@ export class PayoutService {
           entries: allEntries,
           outputs,
           changeAddress,
-          priorityFee: 1000n,
+          priorityFee: 3_000_000n, // 0.03 KAS — post-Toccata tn10 requires 100 sompi/gram (was 1000n)
           networkId: config.network
         })
 
@@ -305,7 +305,7 @@ export class PayoutService {
           entries: allEntries,
           outputs,
           changeAddress,
-          priorityFee: 1000n,
+          priorityFee: 3_000_000n, // 0.03 KAS — post-Toccata tn10 requires 100 sompi/gram (was 1000n)
           networkId: config.network
         })
 
