@@ -9,6 +9,7 @@
 //   node-health
 //   fund-simple  <artifact.json> [senderBot=bot1]         -> pays `pot` sompi to the pot P2SH addr
 //   fund-join    <artifact.json> [bot1..bot6 csv]         -> spec-§2 atomic 0x81 join, 6 inputs -> pot
+//   game         [bot1..bot6 csv] [--stake=S --fee=S]     -> full non-custodial round: buildGame->fund->settle RESOLVE
 //   settle       <artifact.json> <txid> <vout> <pathName> [--sigops N] [--fee-override S] [--dry]
 //   get-tx       <txid>
 //   wait-utxo    <address|spkHex> <expectedSompi>
@@ -17,7 +18,9 @@ import kaspa from '../vendor/kaspa-wasm/kaspa.js';
 import fs from 'fs';
 import crypto from 'crypto';
 import { assembleFundingPskt, FundingContribution } from '../backend/src/covenant/pskt';
+import { buildGame, Seat } from '../backend/src/covenant/game-service';
 import { execFileSync } from 'child_process';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -46,6 +49,13 @@ function readMnemonic(): string {
   const env = fs.readFileSync(envPath, 'utf8');
   const m = env.match(/^WALLET_MNEMONIC=(.+)$/m);
   if (!m) throw new Error('WALLET_MNEMONIC not in backend/.env.local');
+  return m[1].trim().replace(/^["']|["']$/g, '');
+}
+function readTreasury(): string {
+  const envPath = new global.URL('../backend/.env.local', import.meta.url);
+  const env = fs.readFileSync(envPath, 'utf8');
+  const m = env.match(/^TREASURY_ADDRESS=(.+)$/m);
+  if (!m) throw new Error('TREASURY_ADDRESS not in backend/.env.local');
   return m[1].trim().replace(/^["']|["']$/g, '');
 }
 function botKeypair(xprv: any, botId: string) {
@@ -313,6 +323,46 @@ async function cmdFundJoin(artifactPath: string, botsCsv = 'bot1,bot2,bot3,bot4,
   return txid;
 }
 
+// Full non-custodial round with bots: buildGame (server-side emit) -> fund join -> settle RESOLVE.
+// Proves the backend covenant orchestration (game-service.ts) end-to-end on a live node.
+async function cmdGame(botsCsv = 'bot1,bot2,bot3,bot4,bot5,bot6', flags: Record<string, string>) {
+  const stake = flags.stake ? BigInt(flags.stake) : 50_000_000n;
+  const fee = flags.fee ? BigInt(flags.fee) : 13_000_000n;
+  const xprv = new XPrv(new Mnemonic(readMnemonic()).toSeed());
+  const bots = botsCsv.split(',').map((s) => s.trim()).map((id) => ({ id, ...botKeypair(xprv, id) }));
+  const treasury = readTreasury();
+  const seats: Seat[] = bots.map((b) => ({
+    payoutSpkHex: payToAddressScript(new Address(b.address)).script as string,
+    coopPubkeyHex: b.privateKey.toKeypair().xOnlyPublicKey.toString() as string,
+  }));
+  const treasurySpkHex = payToAddressScript(new Address(treasury)).script as string;
+
+  log(`buildGame: ${seats.length} bot seats, server-generated real secrets + room-nonce ctx, treasury ${treasury}`);
+  const built = buildGame(seats, treasurySpkHex, { stake, fee, d1: 1000, d2: 37000 });
+  const victim = built.artifact.paths.find((p: any) => p.name === 'resolve').victimSeat;
+  log('artifact emitted (VM-self-verified). pot P2SH', built.artifact.potScriptPublicKey.scriptHex);
+  log('room-nonce ctx', built.roomNonceHex, '| RESOLVE victim seat', victim);
+
+  const artPath = path.join(os.tmpdir(), `lc-game-${crypto.randomBytes(6).toString('hex')}.json`);
+  fs.writeFileSync(artPath, JSON.stringify(built.artifact));
+  try {
+    const joinTxid = await cmdFundJoin(artPath, botsCsv);
+    log('funded. waiting ~18s for pot UTXO to confirm...');
+    await new Promise((r) => setTimeout(r, 18000));
+    const settleTxid = await cmdSettle(artPath, joinTxid, '0', 'resolve', {});
+    log('=== NON-CUSTODIAL GAME ROUND COMPLETE ===');
+    log('join tx  :', joinTxid);
+    log('settle tx:', settleTxid, `(RESOLVE, victim seat ${victim} -> 5 survivors + treasury)`);
+    return { joinTxid, settleTxid };
+  } finally {
+    try {
+      fs.unlinkSync(artPath);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 async function cmdSettle(
   artifactPath: string,
   txid: string,
@@ -482,6 +532,9 @@ for (const r of rest) {
         break;
       case 'fund-join':
         await cmdFundJoin(positional[0], positional[1]);
+        break;
+      case 'game':
+        await cmdGame(positional[0], flags);
         break;
       case 'settle':
         await cmdSettle(positional[0], positional[1], positional[2], positional[3], flags);

@@ -38,7 +38,15 @@ emitter BAKES ctx as a constant** (from config). Two ways to reconcile:
 → **OPEN: (B) room-nonce now (fastest, emitter-ready) vs (C) outpoint-read (spec-intent, codegen work).**
 For the bots TN10 proof, (B) is sufficient.
 
-## room-manager changes (flag `COVENANT_ENABLED`, default false; custodial untouched)
+## Ecosystem rule: generation = server (Rust), verification = client
+Every covenant surface — Lucky Chamber, Tap-and-Win (KSNV-170), miniapps — follows the same split: the
+redeem script is GENERATED server-side by the prebuilt silverscript-Rust bin (one toolchain, VM-proven),
+and each client VERIFIES it by recomputing the pot/escrow P2SH from the redeem blob (`verify.ts` for
+TS/web/miniapps; a Dart port for Flutter). Clients never *build* scripts — no wasm/Dart ScriptBuilder port.
+Trivial covenants additionally golden-test the SilverScript output byte-for-byte against a known-good
+reference (Tap-and-Win vs the prod Dart `VaultScriptBuilder`). Trust stays portable without Rust-on-client.
+
+## room-manager changes (flag `COVENANT_ENABLED`, default false during build; custodial untouched)
 State machine `LOBBY→FUNDING→LOCKED→PLAYING→SETTLED` stays; only the custody + settle mechanics swap:
 1. **FUNDING (covenant):** replace per-seat deposit addresses (`crypto/wallet.ts`, `deposit-monitor.ts`) with:
    collect each seat's commit + one ANYONECANPAY-signed input → assemble join (`pskt.ts`) → broadcast. Pot
@@ -71,8 +79,8 @@ State machine `LOBBY→FUNDING→LOCKED→PLAYING→SETTLED` stays; only the cus
 3. **Frontend:** client 192B secret gen + commit + shard reveal + `signPsbt` funding. — BLOCKED (KSNV-161/177).
 4. §5 custodial deletions. 5. Mainnet cutover (all ship gates green).
 
-## Open decisions for Ren
-1. Ship the Rust `deploy_artifacts` binary in the backend image? (vs a codegen service / TS port)
-2. ctx binding: (B) room-nonce now, or (C) outpoint-read codegen (spec intent)?
-3. Feature-flag granularity: global / per-mode / per-room?
-4. OK to merge KSNV-161 (bridge `signPsbt`, implemented on `feat/dapp-bridge-signpsbt`) so the real-user path unblocks?
+## Decisions (locked 2026-07-02, Ren)
+1. **Codegen = ship the prebuilt Rust `deploy_artifacts` binary in the backend image** (multi-stage Docker, spawn per game). Rust silverscript stays the SERVER-SIDE generator for complex covenant blobs; trivial covenants (vaults, Tap-and-Win) stay on kaspa-wasm `ScriptBuilder`. The reusable *cross-platform* asset is the **verifier** — `verify.ts` (web/miniapps) + a Dart port (Flutter fairness modal) + the Rust self-check — all recomputing the pot P2SH byte-for-byte. Flutter/miniapps VERIFY (don't generate); no Rust-on-mobile.
+2. **ctx = room-nonce** (random 32B agreed at matchmaking; emitter already supports `ctxHex`). Outpoint-read (spec §3) deferred as a hardening follow-up.
+3. **Non-custodial (covenants) is the DEFAULT / ship target — "covenants or nothing."** `COVENANT_ENABLED` is temporary BUILD scaffolding (default-off during the build so the live custodial game isn't broken mid-wiring); at ship it is removed and the custodial path is DELETED (§5). No permanent dual-mode.
+4. **Merge KSNV-161** (bridge `signPsbt`) to unblock the real-user path; still needs the KSNV-177 adapter for the game's signer shape.
